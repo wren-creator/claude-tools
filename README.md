@@ -137,14 +137,72 @@ letting it leak. Every call is logged to `tn3270_log.jsonl` (gitignored).
   unprotected field on the banner screen and the hidden password fields on
   the TSO/E LOGON screen.
 
+## repo-bridge
+
+Exposes four tools for getting codebase context from a repo outside Claude
+Code's own working directory:
+
+- `search_codebase(repo_path, query, max_results=50, ignore_case=False)` —
+  greps `repo_path` for `query` (a regex). Uses `git grep` when `repo_path`
+  is a git repo (respects `.gitignore`), otherwise plain `grep -r`. Returns
+  `path:line:content` per match.
+- `get_file(repo_path, path)` — returns the full contents of `path`
+  (relative to `repo_path`), truncated past 60k chars. Rejects paths that
+  escape `repo_path` (e.g. `../../etc/passwd`).
+- `list_structure(repo_path, max_entries=500)` — returns a directory tree as
+  indented text. Uses `git ls-files` (tracked files only) when `repo_path`
+  is a git repo, otherwise walks the filesystem skipping common junk dirs
+  (`node_modules`, `.venv`, `__pycache__`, etc.).
+- `get_symbol(repo_path, name, language="")` — finds a function/class/
+  method/type definition named `name` and returns its source text via
+  [tree-sitter](https://tree-sitter.github.io/tree-sitter/). Supports
+  `python`, `javascript`, `typescript`, `tsx`, and `go`. Greps for files
+  that reference `name` first rather than parsing the whole repo, and
+  returns the first match found.
+
+Pass the absolute path of the repo you want as `repo_path` for every tool —
+this server runs as its own process and does not share Claude Code's
+working directory.
+
+### Setup
+
+1. Install this project's dependencies (shared `.venv`):
+   ```
+   cd ~/git/claude-tools
+   .venv/bin/pip install -r requirements.txt
+   ```
+2. Register the server with Claude Code:
+   ```
+   claude mcp add repo-bridge --scope user -- \
+     ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/repo_bridge.py
+   ```
+3. Restart Claude Code / reload the window.
+
+### Notes
+
+- Uses the official per-language `tree-sitter-*` packages (prebuilt wheels,
+  compiled at install time), not the `tree-sitter-language-pack` package —
+  that one downloads grammars over the network on first use, which is a bad
+  fit for this repo's other lesson-learned (see gemini-bridge's network
+  preflight check above) and just failed outright when tried on a flaky
+  connection.
+- `get_symbol` matches by each grammar's `name` field on definition-like
+  node types (`function_definition`, `class_declaration`, etc.) — this
+  works generically across languages without per-language field lookups,
+  but only ever returns the *first* match, so an overloaded/duplicate name
+  across files will only surface one of them.
+- Verified against this repo (Python) and small standalone TypeScript/Go
+  fixtures — `get_symbol` correctly pulled `_call_gemini`, a TS `class`, a
+  TS `function`, and a Go `func`, each with correct line ranges.
+
 ## Roadmap
 
 - [ ] Add a third gemini-bridge tool for querying Gemini's larger context
       window on full files, not just diffs.
-- [ ] repo-aware MCP server: `search_codebase`, `get_file`, `list_structure`,
-      and (tree-sitter-backed) `get_symbol` tools, for cases where Claude
-      needs codebase context outside its own working directory.
-- [ ] tn3270-bridge: structured `read_screen` mode (field positions,
+- [ ] repo-bridge: expand `get_symbol` language support beyond
+      python/javascript/typescript/tsx/go (e.g. rust, java, ruby, c/c++),
+      and consider returning all matches instead of just the first.
+- [x] tn3270-bridge: structured `read_screen` mode (field positions,
       protected/unprotected, cursor location) alongside the plain-text dump,
       for when an agent needs to know where to type, not just what's shown.
 - [ ] Front the MCP servers with an [`mcpo`](https://github.com/open-webui/mcpo)
