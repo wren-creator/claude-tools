@@ -108,9 +108,11 @@ letting it leak. Every call is logged to `tn3270_log.jsonl` (gitignored).
   command — plain text, one line per row, no field/attribute metadata. If an
   agent needs to know *where* fields are (protected vs. unprotected, cursor
   position) rather than just what's on screen, that's the next layer to add.
-- This is a scaffold: connect/send_keys/read_screen/send_function_key/
-  disconnect all work against a real `s3270` process, but it's only had
-  smoke-level testing so far, not a real mainframe session.
+- All five tools have been exercised against a live TN3270 host (a local
+  test mainframe on `localhost:3270`): `connect` + `read_screen` pulled back
+  the logon banner, `send_keys("TSO\n")` advanced from the logon-type prompt
+  to the TSO/E LOGON screen, and `send_function_key("PF3")` logged off back
+  to the banner as expected.
 
 ## Roadmap
 
