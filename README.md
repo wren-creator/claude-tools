@@ -166,9 +166,9 @@ Code's own working directory:
 - `get_symbol(repo_path, name, language="")` — finds a function/class/
   method/type definition named `name` and returns its source text via
   [tree-sitter](https://tree-sitter.github.io/tree-sitter/). Supports
-  `python`, `javascript`, `typescript`, `tsx`, and `go`. Greps for files
-  that reference `name` first rather than parsing the whole repo, and
-  returns the first match found.
+  `python`, `javascript`, `typescript`, `tsx`, `go`, `rust`, `java`, `ruby`,
+  `c`, and `cpp`. Greps for files that reference `name` first rather than
+  parsing the whole repo, and returns the first match found.
 
 Pass the absolute path of the repo you want as `repo_path` for every tool —
 this server runs as its own process and does not share Claude Code's
@@ -201,17 +201,27 @@ working directory.
   works generically across languages without per-language field lookups,
   but only ever returns the *first* match, so an overloaded/duplicate name
   across files will only surface one of them.
-- Verified against this repo (Python) and small standalone TypeScript/Go
-  fixtures — `get_symbol` correctly pulled `_call_gemini`, a TS `class`, a
-  TS `function`, and a Go `func`, each with correct line ranges.
+- C and C++ `function_definition` nodes are the one exception to the
+  generic `name`-field lookup above: their identifier is nested inside a
+  `declarator` chain (a `pointer_declarator` for pointer return types, etc.)
+  ending in a `function_declarator` whose own `declarator` field is the
+  actual identifier. `_c_family_function_name()` in `repo_bridge.py` unwraps
+  that chain; struct/enum/union/class specifiers in C/C++ do expose a
+  `name` field directly and don't need it.
+- Verified against this repo (Python) and small standalone fixtures for
+  TypeScript, Go, Rust, Java, Ruby, C, and C++ — `get_symbol` correctly
+  pulled a function/struct (or class/method) from each, with correct line
+  ranges.
 
 ## Roadmap
 
 - [x] Add a third gemini-bridge tool for querying Gemini's larger context
       window on full files, not just diffs.
-- [ ] repo-bridge: expand `get_symbol` language support beyond
-      python/javascript/typescript/tsx/go (e.g. rust, java, ruby, c/c++),
-      and consider returning all matches instead of just the first.
+- [x] repo-bridge: expand `get_symbol` language support beyond
+      python/javascript/typescript/tsx/go — added rust, java, ruby, c,
+      and cpp.
+- [ ] repo-bridge: `get_symbol` should return all matches instead of just
+      the first.
 - [x] tn3270-bridge: structured `read_screen` mode (field positions,
       protected/unprotected, cursor location) alongside the plain-text dump,
       for when an agent needs to know where to type, not just what's shown.

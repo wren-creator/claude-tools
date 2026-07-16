@@ -20,18 +20,31 @@ EXTENSION_LANGUAGE = {
     ".ts": "typescript",
     ".tsx": "tsx",
     ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".rb": "ruby",
+    ".c": "c", ".h": "c",
+    ".cpp": "cpp", ".cc": "cpp", ".cxx": "cpp", ".hpp": "cpp", ".hh": "cpp",
 }
 
 # Node types that represent a named function/class/method/type definition in
-# each grammar. Every one of these node types exposes its identifier via the
+# each grammar. Most of these node types expose their identifier via the
 # "name" field, which is what lets get_symbol match by name generically
-# instead of needing per-language field lookups.
+# instead of needing per-language field lookups. The exception is C/C++
+# `function_definition`, whose identifier is nested inside a `declarator`
+# chain rather than exposed as a "name" field directly - see
+# _definition_name below.
 DEFINITION_TYPES = {
     "python": {"function_definition", "class_definition"},
     "javascript": {"function_declaration", "generator_function_declaration", "method_definition", "class_declaration"},
     "typescript": {"function_declaration", "method_definition", "class_declaration", "interface_declaration", "type_alias_declaration", "enum_declaration"},
     "tsx": {"function_declaration", "method_definition", "class_declaration", "interface_declaration", "type_alias_declaration", "enum_declaration"},
     "go": {"function_declaration", "method_declaration", "type_spec"},
+    "rust": {"function_item", "struct_item", "enum_item", "trait_item"},
+    "java": {"class_declaration", "interface_declaration", "enum_declaration", "record_declaration", "method_declaration", "constructor_declaration"},
+    "ruby": {"method", "singleton_method", "class", "module"},
+    "c": {"function_definition", "struct_specifier", "enum_specifier", "union_specifier"},
+    "cpp": {"function_definition", "class_specifier", "struct_specifier", "enum_specifier", "union_specifier"},
 }
 
 _PARSER_CACHE: dict[str, Parser] = {}
@@ -53,6 +66,21 @@ def _get_parser(language: str) -> Parser:
             lang = Language(ts_lang.language_tsx())
         elif language == "go":
             import tree_sitter_go as ts_lang
+            lang = Language(ts_lang.language())
+        elif language == "rust":
+            import tree_sitter_rust as ts_lang
+            lang = Language(ts_lang.language())
+        elif language == "java":
+            import tree_sitter_java as ts_lang
+            lang = Language(ts_lang.language())
+        elif language == "ruby":
+            import tree_sitter_ruby as ts_lang
+            lang = Language(ts_lang.language())
+        elif language == "c":
+            import tree_sitter_c as ts_lang
+            lang = Language(ts_lang.language())
+        elif language == "cpp":
+            import tree_sitter_cpp as ts_lang
             lang = Language(ts_lang.language())
         else:
             raise ValueError(f"unsupported language: {language}")
@@ -206,9 +234,10 @@ def list_structure(repo_path: str, max_entries: int = MAX_TREE_ENTRIES) -> str:
 def get_symbol(repo_path: str, name: str, language: str = "") -> str:
     """Find a function/class/method/type definition named `name` in
     repo_path and return its source text. Supports python, javascript,
-    typescript, tsx, and go. Optionally restrict to one of those via
-    `language`. Returns the first match found; searches files that
-    reference `name` first (via grep) rather than parsing the whole repo.
+    typescript, tsx, go, rust, java, ruby, c, and cpp. Optionally restrict
+    to one of those via `language`. Returns the first match found;
+    searches files that reference `name` first (via grep) rather than
+    parsing the whole repo.
     """
     try:
         candidates = _grep_matches(repo_path, rf"\b{name}\b", ignore_case=False, max_results=200)
@@ -247,9 +276,31 @@ def get_symbol(repo_path: str, name: str, language: str = "") -> str:
     return f"No definition found for '{name}' in {repo_path} (searched {len(files_seen)} candidate file(s))"
 
 
+def _c_family_function_name(node: Node) -> Node | None:
+    # C/C++ function_definition nodes don't expose a "name" field - the
+    # identifier is nested inside a chain of declarators (pointer_declarator
+    # for pointer return types, etc.) ending in a function_declarator whose
+    # own "declarator" field is the actual identifier.
+    declarator = node.child_by_field_name("declarator")
+    while declarator is not None and declarator.type != "function_declarator":
+        declarator = declarator.child_by_field_name("declarator")
+    if declarator is None:
+        return None
+    return declarator.child_by_field_name("declarator")
+
+
+def _definition_name(node: Node) -> Node | None:
+    name_node = node.child_by_field_name("name")
+    if name_node is not None:
+        return name_node
+    if node.type == "function_definition":
+        return _c_family_function_name(node)
+    return None
+
+
 def _find_definition(node: Node, name: str, definition_types: set[str]) -> Node | None:
     if node.type in definition_types:
-        name_node = node.child_by_field_name("name")
+        name_node = _definition_name(node)
         if name_node is not None and name_node.text.decode("utf-8", errors="replace") == name:
             return node
     for child in node.children:
