@@ -64,6 +64,12 @@ was asked and answered.
   If it's renamed, only `_call_gemini()` in `gemini_bridge.py` needs updating.
 - Context and diffs are truncated to 60k characters before being sent to
   Gemini to avoid blowing past its context window.
+- Before invoking the Gemini CLI, `_call_gemini()` does a quick 5s TCP
+  preflight check against Gemini's API host. On a flaky connection (e.g. a
+  phone hotspot), this fails fast with a clear error instead of blocking for
+  the full `GEMINI_TIMEOUT` (120s). Restart Claude Code / reload the window
+  after pulling this change, since the running server process won't pick it
+  up otherwise.
 
 ## tn3270-bridge
 
