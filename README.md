@@ -75,7 +75,14 @@ sessions:
 - `send_keys(session_id, keys)` — types `keys` into the current field. A
   `"\n"` in `keys` presses Enter (e.g. `"myuser\n"` types `myuser` and
   submits it). Returns the resulting screen.
-- `read_screen(session_id)` — returns the current screen as plain text.
+- `read_screen(session_id, structured=False)` — returns the current screen
+  as plain text. With `structured=True`, returns JSON instead:
+  `{"cursor": {"row", "col"}, "fields": [{"row", "col", "protected",
+  "hidden", "autoskip", "modified", "text"}, ...]}` — use this when an agent
+  needs to know *where* to type (which field is unprotected, which one is a
+  hidden password field) rather than just what's on screen. Row/col are
+  1-indexed and refer to the field's attribute-byte position, so the first
+  typeable character is one column to the right of `col`.
 - `send_function_key(session_id, key)` — sends `PFn`/`PAn`/`Clear`/`Enter`.
   Returns the resulting screen.
 - `disconnect(session_id)` — closes the session.
@@ -104,15 +111,25 @@ letting it leak. Every call is logged to `tn3270_log.jsonl` (gitignored).
 
 ### Notes
 
-- `read_screen` dumps the full screen buffer via x3270's `Ascii()` script
-  command — plain text, one line per row, no field/attribute metadata. If an
-  agent needs to know *where* fields are (protected vs. unprotected, cursor
-  position) rather than just what's on screen, that's the next layer to add.
+- Plain-text `read_screen` uses x3270's `Ascii()` script command. Structured
+  mode uses `ReadBuffer(Ascii)`, which annotates the buffer with `SF(...)`
+  markers at each field's attribute byte; the byte's bits are decoded per
+  the 3270 field-attribute spec (IBM GA23-0059) into `protected`/`hidden`/
+  `autoskip`/`modified`. `hidden` is what marks password fields — verified
+  against a live TSO logon screen, where `Password`/`New Password`/`MFA
+  Token` all came back `hidden: true` and `Userid` did not.
+- Field `row`/`col` and cursor `row`/`col` come from two different x3270
+  commands with different indexing (`ReadBuffer` is 1-indexed, `Query
+  (Cursor)` is 0-indexed) — `_structured_screen()` normalizes both to
+  1-indexed. Confirmed by checking the cursor lands one column past an
+  unprotected field's attribute byte, which is where typing actually starts.
 - All five tools have been exercised against a live TN3270 host (a local
   test mainframe on `localhost:3270`): `connect` + `read_screen` pulled back
   the logon banner, `send_keys("TSO\n")` advanced from the logon-type prompt
-  to the TSO/E LOGON screen, and `send_function_key("PF3")` logged off back
-  to the banner as expected.
+  to the TSO/E LOGON screen, `send_function_key("PF3")` logged off back to
+  the banner, and structured `read_screen` correctly identified the one
+  unprotected field on the banner screen and the hidden password fields on
+  the TSO/E LOGON screen.
 
 ## Roadmap
 
