@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import subprocess
 import time
 from pathlib import Path
@@ -13,6 +14,8 @@ GEMINI_ENV_FILE = Path.home() / ".gemini" / ".env"
 GEMINI_TIMEOUT = 120
 GIT_TIMEOUT = 30
 MAX_CONTEXT_CHARS = 60_000  # guard against blowing past Gemini's context window
+NETWORK_CHECK_HOST = "generativelanguage.googleapis.com"
+NETWORK_CHECK_TIMEOUT = 5  # fail fast on a flaky connection instead of waiting GEMINI_TIMEOUT
 
 
 def _log(entry: dict) -> None:
@@ -42,7 +45,22 @@ def _gemini_env() -> dict:
     return env
 
 
+def _network_reachable() -> bool:
+    try:
+        socket.create_connection((NETWORK_CHECK_HOST, 443), timeout=NETWORK_CHECK_TIMEOUT).close()
+        return True
+    except OSError:
+        return False
+
+
 def _call_gemini(prompt: str) -> str:
+    if not _network_reachable():
+        return (
+            f"Error calling Gemini: no network reachable to {NETWORK_CHECK_HOST} "
+            f"within {NETWORK_CHECK_TIMEOUT}s - skipping call rather than waiting "
+            f"out the full {GEMINI_TIMEOUT}s timeout."
+        )
+
     try:
         result = subprocess.run(
             ["gemini", "-p", prompt],
