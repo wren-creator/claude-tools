@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -8,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("gemini-bridge")
 
 LOG_PATH = Path(__file__).parent / "log.jsonl"
+GEMINI_ENV_FILE = Path.home() / ".gemini" / ".env"
 GEMINI_TIMEOUT = 120
 GIT_TIMEOUT = 30
 MAX_CONTEXT_CHARS = 60_000  # guard against blowing past Gemini's context window
@@ -25,6 +27,21 @@ def _truncate(text: str, limit: int = MAX_CONTEXT_CHARS) -> str:
     return text[:limit] + f"\n\n[... truncated {len(text) - limit} chars ...]"
 
 
+def _gemini_env() -> dict:
+    # gemini-cli's own ~/.gemini/.env auto-discovery doesn't reliably fire
+    # when invoked as a subprocess from an arbitrary cwd, so load it ourselves.
+    env = os.environ.copy()
+    if GEMINI_ENV_FILE.exists():
+        for line in GEMINI_ENV_FILE.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            env[key.strip()] = value.strip()
+    env.setdefault("GEMINI_CLI_TRUST_WORKSPACE", "true")
+    return env
+
+
 def _call_gemini(prompt: str) -> str:
     try:
         result = subprocess.run(
@@ -32,6 +49,7 @@ def _call_gemini(prompt: str) -> str:
             capture_output=True,
             text=True,
             timeout=GEMINI_TIMEOUT,
+            env=_gemini_env(),
         )
     except subprocess.TimeoutExpired:
         return f"Error calling Gemini: timed out after {GEMINI_TIMEOUT}s"
