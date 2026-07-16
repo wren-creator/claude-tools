@@ -14,6 +14,7 @@ GEMINI_ENV_FILE = Path.home() / ".gemini" / ".env"
 GEMINI_TIMEOUT = 120
 GIT_TIMEOUT = 30
 MAX_CONTEXT_CHARS = 60_000  # guard against blowing past Gemini's context window
+MAX_FILE_CONTEXT_CHARS = 500_000  # ask_gemini_about_files exists specifically to use Gemini's much larger window
 NETWORK_CHECK_HOST = "generativelanguage.googleapis.com"
 NETWORK_CHECK_TIMEOUT = 5  # fail fast on a flaky connection instead of waiting GEMINI_TIMEOUT
 
@@ -130,6 +131,39 @@ def review_diff(
         "repo_path": repo_path,
         "instructions": instructions,
         "diff_len": len(diff.stdout),
+        "response": response,
+    })
+    return response
+
+
+@mcp.tool()
+def ask_gemini_about_files(file_paths: list[str], question: str) -> str:
+    """Read one or more full files and ask Gemini a question about them.
+    Use this when Claude's context is too full to hold the files itself, or
+    when you specifically want Gemini's take on entire files/modules rather
+    than a diff or a truncated excerpt - Gemini's context window is large
+    enough to hold much more than ask_gemini's context param allows.
+    Pass absolute paths - the bridge runs as its own process and does not
+    share Claude Code's cwd.
+    """
+    sections = []
+    total_len = 0
+    for path in file_paths:
+        try:
+            text = Path(path).read_text()
+        except OSError as e:
+            return f"Error reading '{path}': {e}"
+        total_len += len(text)
+        sections.append(f"--- {path} ---\n{text}")
+
+    combined = _truncate("\n\n".join(sections), MAX_FILE_CONTEXT_CHARS)
+    prompt = f"{question}\n\n{combined}"
+    response = _call_gemini(prompt)
+    _log({
+        "tool": "ask_gemini_about_files",
+        "file_paths": file_paths,
+        "question": question,
+        "total_len": total_len,
         "response": response,
     })
     return response

@@ -4,7 +4,7 @@ Local MCP servers that give Claude Code access to other tools mid-session.
 
 ## gemini-bridge
 
-Exposes two tools backed by the [Gemini CLI](https://google-gemini.github.io/gemini-cli/):
+Exposes three tools backed by the [Gemini CLI](https://google-gemini.github.io/gemini-cli/):
 
 - `ask_gemini(prompt, context="")` — ask Gemini a question, e.g. for a second
   opinion on an approach.
@@ -12,6 +12,14 @@ Exposes two tools backed by the [Gemini CLI](https://google-gemini.github.io/gem
   and sends it to Gemini for critique. Pass the absolute path of the repo you
   want reviewed; the bridge runs as its own background process and does not
   share Claude Code's working directory.
+- `ask_gemini_about_files(file_paths, question)` — reads one or more full
+  files and asks Gemini a question about them. Use this instead of
+  `ask_gemini`'s `context` param when the files are too large for Claude's
+  own context, or when you want Gemini's take on whole files/modules rather
+  than a truncated excerpt — Gemini's window is large enough to hold much
+  more (up to 500k chars) than `ask_gemini`/`review_diff` allow (60k chars).
+  Pass absolute paths; the bridge runs as its own process and does not share
+  Claude Code's cwd.
 
 Every call is logged to `log.jsonl` (gitignored) as an audit trail of what
 was asked and answered.
@@ -49,8 +57,8 @@ was asked and answered.
    claude mcp add gemini-bridge --scope user -- \
      ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/gemini_bridge.py
    ```
-5. Restart Claude Code / reload the window. `ask_gemini` and `review_diff`
-   should show up as callable tools.
+5. Restart Claude Code / reload the window. `ask_gemini`, `review_diff`, and
+   `ask_gemini_about_files` should show up as callable tools.
 
 ### Notes
 
@@ -63,7 +71,9 @@ was asked and answered.
   candidate for future deprecation ([gemini-cli#16025](https://github.com/google-gemini/gemini-cli/issues/16025)).
   If it's renamed, only `_call_gemini()` in `gemini_bridge.py` needs updating.
 - Context and diffs are truncated to 60k characters before being sent to
-  Gemini to avoid blowing past its context window.
+  Gemini to avoid blowing past its context window. `ask_gemini_about_files`
+  uses a much higher 500k-character ceiling, since its whole point is to use
+  Gemini's larger window on full files.
 - Before invoking the Gemini CLI, `_call_gemini()` does a quick 5s TCP
   preflight check against Gemini's API host. On a flaky connection (e.g. a
   phone hotspot), this fails fast with a clear error instead of blocking for
@@ -197,7 +207,7 @@ working directory.
 
 ## Roadmap
 
-- [ ] Add a third gemini-bridge tool for querying Gemini's larger context
+- [x] Add a third gemini-bridge tool for querying Gemini's larger context
       window on full files, not just diffs.
 - [ ] repo-bridge: expand `get_symbol` language support beyond
       python/javascript/typescript/tsx/go (e.g. rust, java, ruby, c/c++),
