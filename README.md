@@ -296,13 +296,129 @@ Every call is logged to `linkedin_log.jsonl` (gitignored) as an audit trail.
   (tested with the full URL form) and deleted via `delete_linkedin_post`
   (tested with the bare URN form) - both input styles work.
 
+## youtube-bridge
+
+Exposes five tools for a solo-creator video pipeline: transcribe a raw
+recording, mechanically tighten it, cut it down semantically, then upload it
+to YouTube on a schedule.
+
+- `transcribe_video(video_path)` — local [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+  transcription with timestamps. Writes `<video_path>.transcript.json` and
+  returns `[MM:SS - MM:SS] text` lines for Claude to read and reason about
+  what to cut.
+- `tighten_video(video_path, output_path="")` — runs [auto-editor](https://github.com/WyattBlue/auto-editor)
+  for a mechanical first pass (cuts silence/dead air). Doesn't understand
+  meaning — pair with `cut_video` for semantic cuts (flubbed takes, restarts,
+  rambling).
+- `cut_video(video_path, keep_segments, output_path="")` — given a list of
+  `[start, end]` second ranges to keep (picked by Claude from the
+  transcript), re-encodes and concatenates via ffmpeg for frame-accurate
+  cuts. Claude decides *what* to cut by reading the transcript; this tool
+  only executes the mechanical trim.
+- `queue_video_for_upload(video_path, title, description, tags, category_id="28", publish_at="")` —
+  uploads as `privacyStatus: "private"` with `status.publishAt` set, so
+  **YouTube itself** flips the video public at that timestamp — no daemon or
+  cron needed on this end. If `publish_at` is omitted, computes the next open
+  slot from `YOUTUBE_POST_TIMES` (comma-separated `HH:MM`, local time — one
+  entry = 1/day, two = 2/day), reading/advancing state in
+  `youtube_schedule_state.json` so repeated calls in one batch-recording
+  session spread out across days without double-booking. On success, moves
+  the source file into a `posted/` subfolder (date-prefixed) so it drops out
+  of the pending queue.
+- `list_pending_videos(folder="")` — lists video files in `folder` (default
+  `YOUTUBE_VIDEO_DIR`) not yet moved to `posted/`, i.e. what's left in a
+  batch day's queue.
+
+`queue_video_for_upload` schedules a video to go **publicly live with no
+further confirmation** at `publish_at` — always confirm title/description/
+tags/timing with the user before calling it, never call it unprompted, same
+rule as `linkedin-bridge`.
+
+Every call is logged to `youtube_log.jsonl` (gitignored).
+
+### Setup
+
+1. Install `ffmpeg` (`brew install ffmpeg`) and this project's Python
+   dependencies (shared `.venv`, `faster-whisper` and `auto-editor` are in
+   `requirements.txt`):
+   ```
+   cd ~/git/claude-tools
+   .venv/bin/pip install -r requirements.txt
+   ```
+2. Create a Google Cloud project, enable the **YouTube Data API v3**, and
+   create an OAuth client of type **Desktop app**. Add
+   `http://localhost:8766/callback` as an authorized redirect URI.
+3. Put the client credentials in `~/.youtube/.env`:
+   ```
+   YOUTUBE_CLIENT_ID=...
+   YOUTUBE_CLIENT_SECRET=...
+   YOUTUBE_VIDEO_DIR=/path/to/your/raw-recordings-folder
+   YOUTUBE_POST_TIMES=10:00,17:00
+   ```
+   then `chmod 600 ~/.youtube/.env`.
+4. Run the one-time OAuth flow (forces `access_type=offline&prompt=consent`
+   so Google actually returns a refresh token):
+   ```
+   .venv/bin/python youtube_oauth_setup.py
+   ```
+   This writes `YOUTUBE_REFRESH_TOKEN` back into `~/.youtube/.env` and prints
+   the authorized channel name to confirm you authorized the right account.
+5. Register the server with Claude Code:
+   ```
+   claude mcp add youtube-bridge --scope user -- \
+     ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/youtube_bridge.py
+   ```
+6. Restart Claude Code / reload the window.
+
+### Notes
+
+- Unlike LinkedIn's ~60-day access token, Google's refresh token doesn't
+  expire from normal use — `youtube_bridge.py` exchanges it for a fresh
+  access token on every call rather than caching one, so
+  `youtube_oauth_setup.py` should only need to run once.
+- `publishAt` requires `privacyStatus: "private"` at upload time (YouTube
+  rejects a scheduled `public`/`unlisted` upload) — the tool always sends
+  `"private"`, which is what triggers YouTube's own scheduling behavior.
+- Uses `urllib` from the standard library for OAuth and the resumable-upload
+  protocol, consistent with the rest of this repo's bridges — no
+  `google-api-python-client` dependency. The upload streams the video file
+  from disk (a file object passed as `data`, not `read_bytes()`) so large
+  recordings don't get fully buffered into memory; it's still a single PUT
+  rather than chunked with per-chunk retry, which would matter more for
+  very large files or flaky connections.
+- `queue_video_for_upload` rejects `publish_at` values less than 5 minutes
+  out, and `cut_video` validates `keep_segments` (sorted, non-overlapping,
+  `end > start`) before touching ffmpeg — both fail fast with a clear error
+  instead of wasting an upload/encode on bad input.
+- `_run()` catches `FileNotFoundError` for missing binaries (`ffmpeg`,
+  `ffprobe`, `auto-editor`) and returns a clean "not found — is it installed
+  and on PATH?" error through the normal returncode-check path, instead of
+  crashing the tool call with a raw traceback.
+- `cut_video` re-encodes at every cut (`trim`+`concat` filter graph) rather
+  than stream-copying, trading some encode time for frame-accurate
+  boundaries — stream-copy cuts only land on keyframes, which would make
+  Claude's semantic cut points imprecise.
+- Default `category_id` is `"28"` (Science & Technology) — override per call
+  if a video fits better under `"27"` (Education) or `"26"` (Howto & Style).
+- Scheduling logic (`_next_publish_slot`) verified standalone: queuing 5
+  videos in a row against `YOUTUBE_POST_TIMES=10:00,17:00` produced
+  2026-07-18 10:00, 2026-07-18 17:00, 2026-07-19 10:00, 2026-07-19 17:00,
+  2026-07-20 10:00 — correct 2/day spread with no double-booking. The
+  upload/OAuth path itself is **not yet verified end-to-end** — needs a real
+  Google Cloud OAuth client and a test upload before relying on it for a real
+  posting schedule.
+- Deliberately excluded from `mcpo_config.json`, same rationale as
+  `linkedin-bridge` (see mcpo Notes below) — publishing tools stay MCP-only
+  so the "confirm before calling" rule can't be bypassed by an HTTP client
+  holding the proxy's API key.
+
 ## mcpo proxy
 
 Fronts `gemini-bridge`, `tn3270-bridge`, and `repo-bridge` with
 [`mcpo`](https://github.com/open-webui/mcpo), so tool-calling harnesses that
 don't speak MCP natively (e.g. Ollama or llama.cpp-based agents) can call
-these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` is
-deliberately excluded - see Notes.
+these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
+`youtube-bridge` are deliberately excluded - see Notes.
 
 ### Setup
 
@@ -359,6 +475,15 @@ deliberately excluded - see Notes.
       auto-escaping reserved characters before every post/update.
 - [x] linkedin-bridge: add `update_linkedin_post` / `delete_linkedin_post` —
       both work with the `w_member_social` scope this app already has.
+- [x] Add `youtube-bridge`: transcribe/tighten/cut a raw recording, then
+      queue it for scheduled upload (YouTube's own `publishAt`, no daemon)
+      with source files auto-moved to `posted/`. Upload/OAuth path not yet
+      verified end-to-end — needs a real Google Cloud OAuth client and a
+      test upload.
+- [ ] youtube-bridge: chunked resumable upload with retry, for large files
+      or flaky connections (current version sends the whole video in one PUT).
+- [ ] youtube-bridge: thumbnail upload (`thumbnails.set`) once the core
+      transcribe → cut → schedule path is verified end-to-end.
 - [ ] linkedin-bridge: add read-back support (a tool that fetches a post's
       live content) once `r_member_social` is available. **Blocked on
       LinkedIn, no ETA** — that permission is currently closed to all new
