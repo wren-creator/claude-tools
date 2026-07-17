@@ -213,6 +213,59 @@ working directory.
   pulled a function/struct (or class/method) from each, with correct line
   ranges.
 
+## linkedin-bridge
+
+Exposes one tool for posting to LinkedIn on behalf of the authenticated member:
+
+- `post_to_linkedin(text, visibility="PUBLIC")` — publishes a text post via
+  LinkedIn's [Posts API](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api).
+  `visibility` is `"PUBLIC"` or `"CONNECTIONS"`. Returns the live post URL on
+  success. This publishes publicly under the user's real identity — always
+  confirm the exact text before calling it, never call it unprompted.
+
+Every call is logged to `linkedin_log.jsonl` (gitignored) as an audit trail.
+
+### Setup
+
+1. Create a LinkedIn Company Page, then a developer app at
+   [linkedin.com/developers/apps](https://www.linkedin.com/developers/apps)
+   associated with it, with the **Share on LinkedIn** product added (grants
+   the `w_member_social` scope). The app needs a real privacy policy URL —
+   this repo's own consulting site's [privacy page](https://wren-creator.github.io/privacy.html)
+   is an example of a minimal one.
+2. Add an **Authorized redirect URL** of `http://localhost:8765/callback` on
+   the app's Auth tab, and note the Client ID and Client Secret.
+3. Put the credentials in `~/.linkedin/.env` (create the file yourself in a
+   text editor — don't paste secrets through an agent if avoidable):
+   ```
+   LINKEDIN_CLIENT_ID=...
+   LINKEDIN_CLIENT_SECRET=...
+   ```
+   then `chmod 600 ~/.linkedin/.env`.
+4. Run the one-time OAuth flow:
+   ```
+   .venv/bin/python linkedin_oauth_setup.py
+   ```
+   This opens a browser for LinkedIn's consent screen, exchanges the resulting
+   code for an access token, fetches the member's person URN, and writes both
+   back into `~/.linkedin/.env`.
+5. Register the server with Claude Code:
+   ```
+   claude mcp add linkedin-bridge --scope user -- \
+     ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/linkedin_bridge.py
+   ```
+
+### Notes
+
+- Standard LinkedIn apps don't get a refresh token without extra approval —
+  access tokens last ~60 days. Re-run `linkedin_oauth_setup.py` once one
+  expires; `post_to_linkedin` will surface LinkedIn's own error message if a
+  call is attempted with an expired token.
+- Uses `urllib` from the standard library rather than adding an HTTP client
+  dependency, consistent with the rest of this repo's bridges.
+- Verified end-to-end: OAuth flow completed, and a real post published
+  successfully via `post_to_linkedin`.
+
 ## Roadmap
 
 - [x] Add a third gemini-bridge tool for querying Gemini's larger context
