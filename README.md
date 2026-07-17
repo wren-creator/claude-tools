@@ -282,6 +282,48 @@ Every call is logged to `linkedin_log.jsonl` (gitignored) as an audit trail.
 - Verified end-to-end: OAuth flow completed, and a real post published
   successfully via `post_to_linkedin`.
 
+## mcpo proxy
+
+Fronts `gemini-bridge`, `tn3270-bridge`, and `repo-bridge` with
+[`mcpo`](https://github.com/open-webui/mcpo), so tool-calling harnesses that
+don't speak MCP natively (e.g. Ollama or llama.cpp-based agents) can call
+these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` is
+deliberately excluded - see Notes.
+
+### Setup
+
+1. Install this project's dependencies (shared `.venv`, `mcpo` is in
+   `requirements.txt`):
+   ```
+   cd ~/git/claude-tools
+   .venv/bin/pip install -r requirements.txt
+   ```
+2. Run it, pointing at `mcpo_config.json` and picking a real API key (not
+   the placeholder below):
+   ```
+   .venv/bin/mcpo --port 8000 --api-key "your-own-key-here" --config mcpo_config.json
+   ```
+3. Each server's tools are now live at `http://localhost:8000/<server-name>/<tool-name>`
+   (e.g. `http://localhost:8000/repo-bridge/list_structure`), with
+   interactive OpenAPI docs per-server at `http://localhost:8000/<server-name>/docs`
+   and a combined spec at `http://localhost:8000/openapi.json`. Every actual
+   tool call requires `Authorization: Bearer <api-key>`; the docs/spec
+   endpoints themselves are intentionally public (mcpo's default behavior).
+
+### Notes
+
+- `linkedin-bridge` is excluded from `mcpo_config.json` on purpose.
+  `post_to_linkedin`'s "always confirm the exact text with the user first"
+  rule is something Claude Code follows as an instruction, not something the
+  proxy enforces - any HTTP client holding the `--api-key` could otherwise
+  trigger a real, public LinkedIn post with no confirmation step. Keeping it
+  MCP-only means posting only ever happens through Claude Code's own
+  guarded tool-call flow.
+- Verified end-to-end: started mcpo with all three servers, confirmed a real
+  `list_structure` call succeeds with the API key and returns 401 without
+  it, and confirmed the (intentionally public) `openapi.json`/`/docs`
+  endpoints are reachable either way.
+
 ## Roadmap
 
 - [x] Add a third gemini-bridge tool for querying Gemini's larger context
@@ -294,10 +336,10 @@ Every call is logged to `linkedin_log.jsonl` (gitignored) as an audit trail.
 - [x] tn3270-bridge: structured `read_screen` mode (field positions,
       protected/unprotected, cursor location) alongside the plain-text dump,
       for when an agent needs to know where to type, not just what's shown.
-- [ ] Front the MCP servers with an [`mcpo`](https://github.com/open-webui/mcpo)
+- [x] Front the MCP servers with an [`mcpo`](https://github.com/open-webui/mcpo)
       (MCP-to-OpenAPI) proxy so tool-calling harnesses built on Ollama or
       llama.cpp — which don't speak MCP natively — can call these tools over
-      plain HTTP.
+      plain HTTP. `linkedin-bridge` excluded on purpose (see mcpo Notes).
 - [ ] linkedin-bridge: dig further into the post-truncation issue (see
       Notes above) — API-created posts sometimes render cut off in the feed
       for reasons not yet pinned down beyond "doesn't happen when posted

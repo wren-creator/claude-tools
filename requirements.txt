@@ -10,3 +10,4 @@ tree-sitter-java
 tree-sitter-ruby
 tree-sitter-c
 tree-sitter-cpp
+mcpo

@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "gemini-bridge": {
+      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
+      "args": ["/Users/britleywrenhoff/git/claude-tools/gemini_bridge.py"]
+    },
+    "tn3270-bridge": {
+      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
+      "args": ["/Users/britleywrenhoff/git/claude-tools/tn3270_bridge.py"]
+    },
+    "repo-bridge": {
+      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
+      "args": ["/Users/britleywrenhoff/git/claude-tools/repo_bridge.py"]
+    }
+  }
+}
