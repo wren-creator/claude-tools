@@ -296,3 +296,11 @@ Every call is logged to `linkedin_log.jsonl` (gitignored) as an audit trail.
       (MCP-to-OpenAPI) proxy so tool-calling harnesses built on Ollama or
       llama.cpp — which don't speak MCP natively — can call these tools over
       plain HTTP.
+- [ ] linkedin-bridge: dig further into the post-truncation issue (see
+      Notes above) — API-created posts sometimes render cut off in the feed
+      for reasons not yet pinned down beyond "doesn't happen when posted
+      through LinkedIn's own UI."
+- [ ] linkedin-bridge: add `update_linkedin_post` / read-back support once
+      `r_member_social` (currently restricted, approved-users-only) is
+      available, so posts can be verified and corrected programmatically
+      instead of requiring a manual check every time.
