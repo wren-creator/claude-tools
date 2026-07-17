@@ -263,6 +263,15 @@ Every call is logged to `linkedin_log.jsonl` (gitignored) as an audit trail.
   call is attempted with an expired token.
 - Uses `urllib` from the standard library rather than adding an HTTP client
   dependency, consistent with the rest of this repo's bridges.
+- LinkedIn documents a 3,000-character limit for the Posts API, but that
+  appears to apply to reviewed/approved partner apps. This app, on the free
+  "Share on LinkedIn" consumer product, silently truncates posts in the feed
+  past ~574 characters with no error from the create call itself - found by
+  posting a ~2,000-character post twice (with byte-verified-clean text both
+  times) and getting the identical cutoff both times. `post_to_linkedin`
+  refuses anything over `MAX_COMMENTARY_CHARS` (550, a conservative margin
+  below that) rather than silently publishing another cut-off post - keep
+  posts short, or split longer updates into a few separate posts.
 - Verified end-to-end: OAuth flow completed, and a real post published
   successfully via `post_to_linkedin`.
 

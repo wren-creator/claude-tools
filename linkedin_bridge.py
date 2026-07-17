@@ -13,6 +13,13 @@ LOG_PATH = Path(__file__).parent / "linkedin_log.jsonl"
 POSTS_URL = "https://api.linkedin.com/rest/posts"
 HTTP_TIMEOUT = 15
 VALID_VISIBILITY = {"PUBLIC", "CONNECTIONS"}
+# LinkedIn documents a 3,000-char limit for the Posts API, but that appears to
+# apply to reviewed/approved partner apps. Empirically, this app (on the free
+# "Share on LinkedIn" consumer product) silently truncates posts past ~574
+# chars in the feed with no error from the create call - discovered by
+# posting a ~2000-char post twice and getting the same cutoff both times.
+# Refuse past a conservative margin below that rather than repeat the mistake.
+MAX_COMMENTARY_CHARS = 550
 
 
 def _log(entry: dict) -> None:
@@ -45,6 +52,12 @@ def post_to_linkedin(text: str, visibility: str = "PUBLIC") -> str:
     """
     if visibility not in VALID_VISIBILITY:
         return f"Error: visibility must be one of {sorted(VALID_VISIBILITY)}, got {visibility!r}"
+
+    if len(text) > MAX_COMMENTARY_CHARS:
+        return (
+            f"Error: text is {len(text)} chars, over the {MAX_COMMENTARY_CHARS}-char limit this "
+            "app's posts appear to be silently truncated at. Shorten it or split it into multiple posts."
+        )
 
     creds = _load_credentials()
     access_token = creds.get("LINKEDIN_ACCESS_TOKEN")
