@@ -13,13 +13,16 @@ LOG_PATH = Path(__file__).parent / "linkedin_log.jsonl"
 POSTS_URL = "https://api.linkedin.com/rest/posts"
 HTTP_TIMEOUT = 15
 VALID_VISIBILITY = {"PUBLIC", "CONNECTIONS"}
-# LinkedIn documents a 3,000-char limit for the Posts API, but that appears to
-# apply to reviewed/approved partner apps. Empirically, this app (on the free
-# "Share on LinkedIn" consumer product) silently truncates posts past ~574
-# chars in the feed with no error from the create call - discovered by
-# posting a ~2000-char post twice and getting the same cutoff both times.
-# Refuse past a conservative margin below that rather than repeat the mistake.
-MAX_COMMENTARY_CHARS = 550
+# Posts made through this API/app sometimes render truncated in the feed with
+# no error from the create call - confirmed NOT correlated with text length
+# (a 548-char post rendered fine, a 209-char post didn't), not with the
+# presence of links, and not with posting order (two identical posts back to
+# back both got cut). The one pattern found: re-posting the exact same text
+# through LinkedIn's own compose UI instead of this API always rendered fully.
+# So this looks like an API/app-specific issue with no reliable way to predict
+# or prevent it from here - always verify the live post after calling this,
+# and if it's cut off, either delete + re-post via this tool (sometimes just
+# works on a second try) or paste the text into LinkedIn's UI manually.
 
 
 def _log(entry: dict) -> None:
@@ -49,15 +52,15 @@ def post_to_linkedin(text: str, visibility: str = "PUBLIC") -> str:
     Requires LINKEDIN_ACCESS_TOKEN and LINKEDIN_PERSON_URN in ~/.linkedin/.env,
     set up via linkedin_oauth_setup.py. If the token has expired (~60 days),
     re-run that script to refresh it.
+
+    IMPORTANT: posts through this tool sometimes render truncated in the feed
+    for reasons that don't correlate with length, links, or post order (see
+    the module-level comment above VALID_VISIBILITY). A "success" return here
+    only means LinkedIn accepted the post, not that it displays in full -
+    always ask the user to check the live URL afterward.
     """
     if visibility not in VALID_VISIBILITY:
         return f"Error: visibility must be one of {sorted(VALID_VISIBILITY)}, got {visibility!r}"
-
-    if len(text) > MAX_COMMENTARY_CHARS:
-        return (
-            f"Error: text is {len(text)} chars, over the {MAX_COMMENTARY_CHARS}-char limit this "
-            "app's posts appear to be silently truncated at. Shorten it or split it into multiple posts."
-        )
 
     creds = _load_credentials()
     access_token = creds.get("LINKEDIN_ACCESS_TOKEN")

@@ -263,15 +263,20 @@ Every call is logged to `linkedin_log.jsonl` (gitignored) as an audit trail.
   call is attempted with an expired token.
 - Uses `urllib` from the standard library rather than adding an HTTP client
   dependency, consistent with the rest of this repo's bridges.
-- LinkedIn documents a 3,000-character limit for the Posts API, but that
-  appears to apply to reviewed/approved partner apps. This app, on the free
-  "Share on LinkedIn" consumer product, silently truncates posts in the feed
-  past ~574 characters with no error from the create call itself - found by
-  posting a ~2,000-character post twice (with byte-verified-clean text both
-  times) and getting the identical cutoff both times. `post_to_linkedin`
-  refuses anything over `MAX_COMMENTARY_CHARS` (550, a conservative margin
-  below that) rather than silently publishing another cut-off post - keep
-  posts short, or split longer updates into a few separate posts.
+- **Known issue: posts sometimes render truncated in the feed, for reasons
+  that don't reduce to a simple rule.** Ruled out so far: text length (a
+  548-char post rendered fully, a 209-char post didn't), the presence of
+  links (a link-free post still got cut), posting order (two identical posts
+  back to back both got cut), and client-side caching (reproduced logged out
+  and in an anonymous session). The one thing that reliably worked: pasting
+  the exact same text into LinkedIn's own compose UI instead of posting via
+  this API. So this looks like something specific to posts created through
+  this API/app that isn't predictable or preventable from here.
+  `post_to_linkedin`'s return value only confirms LinkedIn *accepted* the
+  post (e.g. `Posted successfully (201)`), never that it renders in full -
+  always check the live URL after calling it. If it's cut off, either
+  delete + re-post via this tool (sometimes a second attempt just works) or
+  fall back to pasting the text into LinkedIn's UI by hand.
 - Verified end-to-end: OAuth flow completed, and a real post published
   successfully via `post_to_linkedin`.
 
