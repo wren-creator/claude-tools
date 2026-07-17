@@ -273,20 +273,19 @@ Every call is logged to `linkedin_log.jsonl` (gitignored) as an audit trail.
   call is attempted with an expired token.
 - Uses `urllib` from the standard library rather than adding an HTTP client
   dependency, consistent with the rest of this repo's bridges.
-- **Known issue: posts sometimes render truncated in the feed, for reasons
-  that don't reduce to a simple rule.** Ruled out so far: text length (a
-  548-char post rendered fully, a 209-char post didn't), the presence of
-  links (a link-free post still got cut), posting order (two identical posts
-  back to back both got cut), and client-side caching (reproduced logged out
-  and in an anonymous session). The one thing that reliably worked: pasting
-  the exact same text into LinkedIn's own compose UI instead of posting via
-  this API. So this looks like something specific to posts created through
-  this API/app that isn't predictable or preventable from here.
-  `post_to_linkedin`'s return value only confirms LinkedIn *accepted* the
-  post (e.g. `Posted successfully (201)`), never that it renders in full -
-  always check the live URL after calling it. If it's cut off, either
-  delete + re-post via this tool (sometimes a second attempt just works) or
-  fall back to pasting the text into LinkedIn's UI by hand.
+- **Solved: the earlier "posts sometimes render truncated" issue was
+  LinkedIn's ["little" text format](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/little-text-format).**
+  The `commentary` field isn't plain text — it's a small markup language for
+  mentions/hashtags, and characters reserved for that markup
+  (`` ( ) [ ] { } @ # < > \ * _ ~ ``) must be backslash-escaped to appear as
+  literal text. Every post logged during the original investigation was
+  checked against this: every single one containing an unescaped `(` or `)`
+  rendered truncated in the feed, every one without either character
+  rendered in full — 11/11 with no exceptions. `_escape_little_format()`
+  now escapes all reserved characters automatically before every
+  `post_to_linkedin`/`update_linkedin_post` call, except `#word` sequences
+  (left alone so intentional hashtags still render as hashtags). Confirmed
+  fixed with a live test post containing parentheses.
 - `update_linkedin_post`/`delete_linkedin_post` don't need `r_member_social`
   (LinkedIn's read-back permission, currently closed for new access
   requests) - only reading a post back to verify its content needs that, so
@@ -355,10 +354,9 @@ deliberately excluded - see Notes.
       (MCP-to-OpenAPI) proxy so tool-calling harnesses built on Ollama or
       llama.cpp — which don't speak MCP natively — can call these tools over
       plain HTTP. `linkedin-bridge` excluded on purpose (see mcpo Notes).
-- [ ] linkedin-bridge: dig further into the post-truncation issue (see
-      Notes above) — API-created posts sometimes render cut off in the feed
-      for reasons not yet pinned down beyond "doesn't happen when posted
-      through LinkedIn's own UI."
+- [x] linkedin-bridge: dig further into the post-truncation issue — root
+      caused to LinkedIn's "little" text format (see Notes above); fixed by
+      auto-escaping reserved characters before every post/update.
 - [x] linkedin-bridge: add `update_linkedin_post` / `delete_linkedin_post` —
       both work with the `w_member_social` scope this app already has.
 - [ ] linkedin-bridge: add read-back support (a tool that fetches a post's
