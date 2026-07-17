@@ -217,13 +217,21 @@ working directory.
 
 ## linkedin-bridge
 
-Exposes one tool for posting to LinkedIn on behalf of the authenticated member:
+Exposes three tools for managing LinkedIn posts on behalf of the
+authenticated member, all via LinkedIn's [Posts API](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api):
 
-- `post_to_linkedin(text, visibility="PUBLIC")` — publishes a text post via
-  LinkedIn's [Posts API](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api).
+- `post_to_linkedin(text, visibility="PUBLIC")` — publishes a text post.
   `visibility` is `"PUBLIC"` or `"CONNECTIONS"`. Returns the live post URL on
-  success. This publishes publicly under the user's real identity — always
-  confirm the exact text before calling it, never call it unprompted.
+  success.
+- `update_linkedin_post(post_url_or_urn, text)` — replaces the text of an
+  existing post. Takes either the live URL or a bare URN. Only needs the
+  `w_member_social` scope this app already has.
+- `delete_linkedin_post(post_url_or_urn)` — permanently deletes a post.
+  Irreversible.
+
+All three publish, edit, or delete under the user's real identity — always
+confirm the exact action/text before calling any of them, never call them
+unprompted.
 
 Every call is logged to `linkedin_log.jsonl` (gitignored) as an audit trail.
 
@@ -279,8 +287,15 @@ Every call is logged to `linkedin_log.jsonl` (gitignored) as an audit trail.
   always check the live URL after calling it. If it's cut off, either
   delete + re-post via this tool (sometimes a second attempt just works) or
   fall back to pasting the text into LinkedIn's UI by hand.
-- Verified end-to-end: OAuth flow completed, and a real post published
-  successfully via `post_to_linkedin`.
+- `update_linkedin_post`/`delete_linkedin_post` don't need `r_member_social`
+  (LinkedIn's read-back permission, currently closed for new access
+  requests) - only reading a post back to verify its content needs that, so
+  there's still no way to check a post's live content without a human
+  looking at it.
+- Verified end-to-end: OAuth flow completed, a real post published
+  successfully via `post_to_linkedin`, then updated via `update_linkedin_post`
+  (tested with the full URL form) and deleted via `delete_linkedin_post`
+  (tested with the bare URN form) - both input styles work.
 
 ## mcpo proxy
 
@@ -344,7 +359,10 @@ deliberately excluded - see Notes.
       Notes above) — API-created posts sometimes render cut off in the feed
       for reasons not yet pinned down beyond "doesn't happen when posted
       through LinkedIn's own UI."
-- [ ] linkedin-bridge: add `update_linkedin_post` / read-back support once
-      `r_member_social` (currently restricted, approved-users-only) is
-      available, so posts can be verified and corrected programmatically
-      instead of requiring a manual check every time.
+- [x] linkedin-bridge: add `update_linkedin_post` / `delete_linkedin_post` —
+      both work with the `w_member_social` scope this app already has.
+- [ ] linkedin-bridge: add read-back support (a tool that fetches a post's
+      live content) once `r_member_social` is available. **Blocked on
+      LinkedIn, no ETA** — that permission is currently closed to all new
+      access requests, not just under heavy review, so there's nothing to
+      do here until that changes.
