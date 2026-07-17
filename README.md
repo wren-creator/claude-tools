@@ -163,12 +163,13 @@ Code's own working directory:
   indented text. Uses `git ls-files` (tracked files only) when `repo_path`
   is a git repo, otherwise walks the filesystem skipping common junk dirs
   (`node_modules`, `.venv`, `__pycache__`, etc.).
-- `get_symbol(repo_path, name, language="")` — finds a function/class/
-  method/type definition named `name` and returns its source text via
-  [tree-sitter](https://tree-sitter.github.io/tree-sitter/). Supports
-  `python`, `javascript`, `typescript`, `tsx`, `go`, `rust`, `java`, `ruby`,
-  `c`, and `cpp`. Greps for files that reference `name` first rather than
-  parsing the whole repo, and returns the first match found.
+- `get_symbol(repo_path, name, language="", max_results=10)` — finds
+  function/class/method/type definitions named `name` and returns their
+  source text via [tree-sitter](https://tree-sitter.github.io/tree-sitter/).
+  Supports `python`, `javascript`, `typescript`, `tsx`, `go`, `rust`, `java`,
+  `ruby`, `c`, and `cpp`. Greps for files that reference `name` first rather
+  than parsing the whole repo, and returns every match found (up to
+  `max_results`), not just the first.
 
 Pass the absolute path of the repo you want as `repo_path` for every tool —
 this server runs as its own process and does not share Claude Code's
@@ -198,9 +199,10 @@ working directory.
   connection.
 - `get_symbol` matches by each grammar's `name` field on definition-like
   node types (`function_definition`, `class_declaration`, etc.) — this
-  works generically across languages without per-language field lookups,
-  but only ever returns the *first* match, so an overloaded/duplicate name
-  across files will only surface one of them.
+  works generically across languages without per-language field lookups.
+  `_find_definitions()` walks the whole tree (including inside already-matched
+  nodes, so e.g. two same-named methods in two different classes in one file
+  both surface) and results are capped at `max_results`, defaulting to 10.
 - C and C++ `function_definition` nodes are the one exception to the
   generic `name`-field lookup above: their identifier is nested inside a
   `declarator` chain (a `pointer_declarator` for pointer return types, etc.)
@@ -287,7 +289,7 @@ Every call is logged to `linkedin_log.jsonl` (gitignored) as an audit trail.
 - [x] repo-bridge: expand `get_symbol` language support beyond
       python/javascript/typescript/tsx/go — added rust, java, ruby, c,
       and cpp.
-- [ ] repo-bridge: `get_symbol` should return all matches instead of just
+- [x] repo-bridge: `get_symbol` should return all matches instead of just
       the first.
 - [x] tn3270-bridge: structured `read_screen` mode (field positions,
       protected/unprotected, cursor location) alongside the plain-text dump,

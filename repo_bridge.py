@@ -10,6 +10,7 @@ mcp = FastMCP("repo-bridge")
 MAX_FILE_CHARS = 60_000
 MAX_SEARCH_RESULTS = 50
 MAX_TREE_ENTRIES = 500
+MAX_SYMBOL_RESULTS = 10
 GIT_TIMEOUT = 15
 
 IGNORED_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", "target", ".next"}
@@ -231,13 +232,14 @@ def list_structure(repo_path: str, max_entries: int = MAX_TREE_ENTRIES) -> str:
 
 
 @mcp.tool()
-def get_symbol(repo_path: str, name: str, language: str = "") -> str:
-    """Find a function/class/method/type definition named `name` in
-    repo_path and return its source text. Supports python, javascript,
+def get_symbol(repo_path: str, name: str, language: str = "", max_results: int = MAX_SYMBOL_RESULTS) -> str:
+    """Find function/class/method/type definitions named `name` in
+    repo_path and return their source text. Supports python, javascript,
     typescript, tsx, go, rust, java, ruby, c, and cpp. Optionally restrict
-    to one of those via `language`. Returns the first match found;
-    searches files that reference `name` first (via grep) rather than
-    parsing the whole repo.
+    to one of those via `language`. Returns every match found (up to
+    max_results), not just the first, since an overloaded or duplicate name
+    across files/classes is common; searches files that reference `name`
+    first (via grep) rather than parsing the whole repo.
     """
     try:
         candidates = _grep_matches(repo_path, rf"\b{name}\b", ignore_case=False, max_results=200)
@@ -250,7 +252,11 @@ def get_symbol(repo_path: str, name: str, language: str = "") -> str:
         if file_path not in files_seen:
             files_seen.append(file_path)
 
+    results: list[str] = []
     for file_path in files_seen:
+        if len(results) >= max_results:
+            break
+
         ext = Path(file_path).suffix
         lang = EXTENSION_LANGUAGE.get(ext)
         if lang is None or (language and lang != language):
@@ -266,14 +272,17 @@ def get_symbol(repo_path: str, name: str, language: str = "") -> str:
         except Exception:
             continue
 
-        match = _find_definition(tree.root_node, name, DEFINITION_TYPES[lang])
-        if match is not None:
+        for match in _find_definitions(tree.root_node, name, DEFINITION_TYPES[lang]):
             start_line = match.start_point[0] + 1
             end_line = match.end_point[0] + 1
             text = match.text.decode("utf-8", errors="replace")
-            return f"{file_path}:{start_line}-{end_line}\n\n{text}"
+            results.append(f"{file_path}:{start_line}-{end_line}\n\n{text}")
+            if len(results) >= max_results:
+                break
 
-    return f"No definition found for '{name}' in {repo_path} (searched {len(files_seen)} candidate file(s))"
+    if not results:
+        return f"No definition found for '{name}' in {repo_path} (searched {len(files_seen)} candidate file(s))"
+    return "\n\n---\n\n".join(results)
 
 
 def _c_family_function_name(node: Node) -> Node | None:
@@ -298,16 +307,15 @@ def _definition_name(node: Node) -> Node | None:
     return None
 
 
-def _find_definition(node: Node, name: str, definition_types: set[str]) -> Node | None:
+def _find_definitions(node: Node, name: str, definition_types: set[str]) -> list[Node]:
+    matches = []
     if node.type in definition_types:
         name_node = _definition_name(node)
         if name_node is not None and name_node.text.decode("utf-8", errors="replace") == name:
-            return node
+            matches.append(node)
     for child in node.children:
-        found = _find_definition(child, name, definition_types)
-        if found is not None:
-            return found
-    return None
+        matches.extend(_find_definitions(child, name, definition_types))
+    return matches
 
 
 if __name__ == "__main__":
