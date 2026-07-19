@@ -433,6 +433,17 @@ Every call is logged to `youtube_log.jsonl` (gitignored).
     (no update/delete tool exists yet, unlike `linkedin-bridge`); both bad
     uploads had to be deleted by hand in YouTube Studio before their
     scheduled publish time.
+- **`tighten_video` disabled 2026-07-19**, the fps/bitrate fix above did not
+  actually resolve the flicker. Two more videos processed through the fixed
+  `tighten_video` still showed the artifact and were unusable. Isolated the
+  cause with an A/B test: the same recording, uploaded completely raw and
+  unedited with no auto-editor pass at all, had no flicker. So the artifact
+  comes from auto-editor's re-encode step itself, not the source capture and
+  not YouTube's transcode, but the exact cause within auto-editor isn't
+  identified yet. `tighten_video` now returns an explanatory error instead
+  of running, rather than silently producing unusable output.
+  `transcribe_video`, `cut_video`, and `queue_video_for_upload` are
+  unaffected. Roadmapped below to revisit once the real cause is found.
 - Deliberately excluded from `mcpo_config.json`, same rationale as
   `linkedin-bridge` (see mcpo Notes below) — publishing tools stay MCP-only
   so the "confirm before calling" rule can't be bypassed by an HTTP client
@@ -510,6 +521,12 @@ these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
       bad first upload (flicker/audio-skip from the fps bug, see Notes) sat
       privately scheduled on YouTube with no way to remove or replace it
       via MCP — had to be fixed by hand in YouTube Studio.
+- [ ] youtube-bridge: find the actual cause of `tighten_video`'s flicker/
+      scanline artifact and re-enable it. Confirmed 2026-07-19 the fps/
+      bitrate fix didn't fix it, and that the artifact is specific to
+      auto-editor's re-encode (raw unedited upload of the same recording had
+      no artifact), but not yet which part of auto-editor's pipeline is at
+      fault. Currently disabled, returns an error instead of running.
 - [ ] youtube-bridge: chunked resumable upload with retry, for large files
       or flaky connections (current version sends the whole video in one PUT).
 - [ ] youtube-bridge: thumbnail upload (`thumbnails.set`) once the core

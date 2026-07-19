@@ -29,13 +29,16 @@ VALID_PRIVACY = {"private", "unlisted", "public"}
 # on PATH to include .venv/bin.
 AUTO_EDITOR_BIN = shutil.which("auto-editor") or str(Path(sys.executable).parent / "auto-editor")
 
-# Standard rate for tighten_video's output timeline (see comment at its
-# call site) - 60fps matches what macOS screen recordings target and is
-# natively supported by YouTube.
+# Unused while tighten_video is disabled (2026-07-19, see its docstring and
+# README roadmap), kept for whenever the actual flicker cause is found and
+# tighten_video is re-enabled.
+#
+# Standard rate for tighten_video's output timeline, 60fps matches what
+# macOS screen recordings target and is natively supported by YouTube.
 TIGHTEN_OUTPUT_FPS = 60
 
 # auto-editor's own default bitrate (~1.4Mbps observed) is far too low for a
-# high-res screen recording with sharp text - it produces visible blocky
+# high-res screen recording with sharp text, it produces visible blocky
 # compression flicker frame-to-frame. Force a bitrate comfortably above the
 # source's own (~4Mbps for a 3024x1898 capture) instead.
 TIGHTEN_VIDEO_BITRATE = "10M"
@@ -174,42 +177,26 @@ def _fmt_ts(seconds: float) -> str:
 
 @mcp.tool()
 def tighten_video(video_path: str, output_path: str = "") -> str:
-    """Run auto-editor over a video to mechanically tighten it - cuts silence
-    and long dead air. Use this as a first pass before any semantic cuts from
-    cut_video. Does NOT understand meaning (won't cut a restarted sentence or
-    a mistake), only audio/motion silence.
+    """DISABLED, see docstring below for why. Was meant to run auto-editor
+    over a video to mechanically tighten it, cutting silence and long dead
+    air, as a first pass before any semantic cuts from cut_video.
 
-    Returns the output path and the before/after duration.
+    Disabled 2026-07-19: auto-editor's re-encode produces a visible
+    flicker/scanline artifact on upload, even with the fps + bitrate pin
+    added earlier tonight. Confirmed the fps/bitrate fix didn't actually
+    fix it, and isolated the cause to auto-editor's re-encode step itself
+    (not the source capture, not YouTube's transcode): the same recording
+    uploaded raw and unedited, with no auto-editor pass at all, had no
+    artifact. Root cause within auto-editor not yet identified, see
+    roadmap. transcribe_video, cut_video, and queue_video_for_upload are
+    unaffected and still work normally.
     """
-    path = _resolve_video_path(video_path)
-    if path is None:
-        return f"Error: {video_path} does not exist"
-
-    out = Path(output_path) if output_path else path.with_name(f"{path.stem}.tightened{path.suffix}")
-    before = _ffprobe_duration(str(path))
-
-    # macOS screen recordings are variable-frame-rate; left to its default,
-    # auto-editor times the output timeline off the source's *average* fps,
-    # which lands on an arbitrary non-standard rate (e.g. 52.41) that judders
-    # on playback. Pin the timeline to a standard rate instead. Also override
-    # auto-editor's own default bitrate, which is too aggressive for detailed
-    # screen-recorded text/UI and produces visible compression-artifact
-    # flicker (see TIGHTEN_VIDEO_BITRATE comment).
-    result = _run(
-        [
-            AUTO_EDITOR_BIN, str(path), "-o", str(out), "--no-open",
-            "--frame-rate", str(TIGHTEN_OUTPUT_FPS),
-            "--video-bitrate", TIGHTEN_VIDEO_BITRATE,
-        ],
-        timeout=1800,
+    return (
+        "tighten_video is disabled pending investigation into a flicker/"
+        "scanline artifact from auto-editor's re-encode (see docstring and "
+        "README roadmap). Use the raw file directly, or transcribe_video + "
+        "cut_video for semantic edits, in the meantime."
     )
-    if result.returncode != 0:
-        _log({"tool": "tighten_video", "video_path": video_path, "error": result.stderr[-2000:]})
-        return f"Error running auto-editor: {result.stderr[-2000:]}"
-
-    after = _ffprobe_duration(str(out))
-    _log({"tool": "tighten_video", "video_path": video_path, "output_path": str(out), "before_s": before, "after_s": after})
-    return f"Tightened: {str(out)}\nDuration {before:.0f}s -> {after:.0f}s"
 
 
 @mcp.tool()
