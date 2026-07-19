@@ -128,23 +128,29 @@ def main():
             "Revoke access at https://myaccount.google.com/permissions and re-run this script."
         )
 
-    print("Fetching channel info to confirm...")
-    req = urllib.request.Request(CHANNELS_URL)
-    req.add_header("Authorization", f"Bearer {access_token}")
-    with urllib.request.urlopen(req) as resp:
-        channels = json.loads(resp.read())
-    channel_title = (
-        channels.get("items", [{}])[0].get("snippet", {}).get("title", "(unknown channel)")
-        if channels.get("items") else "(no channel found on this account)"
-    )
-
     env["YOUTUBE_CLIENT_ID"] = client_id
     env["YOUTUBE_CLIENT_SECRET"] = client_secret
     env["YOUTUBE_REFRESH_TOKEN"] = refresh_token
     _write_env(env)
-
     print(f"\nDone. Refresh token saved to {ENV_FILE}.")
-    print(f"Authorized channel: {channel_title}")
+
+    print("Fetching channel info to confirm...")
+    try:
+        req = urllib.request.Request(CHANNELS_URL)
+        req.add_header("Authorization", f"Bearer {access_token}")
+        with urllib.request.urlopen(req) as resp:
+            channels = json.loads(resp.read())
+        channel_title = (
+            channels.get("items", [{}])[0].get("snippet", {}).get("title", "(unknown channel)")
+            if channels.get("items") else "(no channel found on this account)"
+        )
+        print(f"Authorized channel: {channel_title}")
+    except urllib.error.HTTPError as e:
+        print(
+            f"(Skipped channel confirmation - {e.code} {e.reason}. This is just a "
+            "nice-to-have check and doesn't affect uploads, which use the "
+            "youtube.upload scope you already granted.)"
+        )
     print(
         "\nAlso set YOUTUBE_VIDEO_DIR (folder you drop raw recordings into) and "
         "YOUTUBE_POST_TIMES (comma-separated HH:MM local times, e.g. 10:00 or "
