@@ -403,10 +403,20 @@ Every call is logged to `youtube_log.jsonl` (gitignored).
 - Scheduling logic (`_next_publish_slot`) verified standalone: queuing 5
   videos in a row against `YOUTUBE_POST_TIMES=10:00,17:00` produced
   2026-07-18 10:00, 2026-07-18 17:00, 2026-07-19 10:00, 2026-07-19 17:00,
-  2026-07-20 10:00 — correct 2/day spread with no double-booking. The
-  upload/OAuth path itself is **not yet verified end-to-end** — needs a real
-  Google Cloud OAuth client and a test upload before relying on it for a real
-  posting schedule.
+  2026-07-20 10:00 — correct 2/day spread with no double-booking.
+- Full pipeline verified end-to-end 2026-07-18 (transcribe → tighten → queue
+  → real OAuth upload), including two fixes found along the way:
+  - `tighten_video` called bare `auto-editor` via `subprocess.run`, which
+    only exists in this project's `.venv/bin`, not on the MCP server's
+    inherited `PATH`. `AUTO_EDITOR_BIN` now resolves it explicitly
+    (`shutil.which` first, falling back to the venv's own `bin/` next to
+    `sys.executable`).
+  - macOS Screenshot/Screen Recording filenames insert a narrow no-break
+    space (`U+202F`) before AM/PM, visually identical to a normal space but
+    byte-different — any retyped (vs. copy-pasted) path silently failed
+    `Path.exists()`. `_resolve_video_path()` now falls back to a
+    whitespace-normalized filename match within the same directory across
+    all four file-taking tools.
 - Deliberately excluded from `mcpo_config.json`, same rationale as
   `linkedin-bridge` (see mcpo Notes below) — publishing tools stay MCP-only
   so the "confirm before calling" rule can't be bypassed by an HTTP client
