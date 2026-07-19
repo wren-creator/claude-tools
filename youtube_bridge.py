@@ -29,6 +29,11 @@ VALID_PRIVACY = {"private", "unlisted", "public"}
 # on PATH to include .venv/bin.
 AUTO_EDITOR_BIN = shutil.which("auto-editor") or str(Path(sys.executable).parent / "auto-editor")
 
+# Standard rate for tighten_video's output timeline (see comment at its
+# call site) - 60fps matches what macOS screen recordings target and is
+# natively supported by YouTube.
+TIGHTEN_OUTPUT_FPS = 60
+
 # Unicode space variants that look identical to a normal space but break
 # exact-match filename lookups (e.g. macOS Screenshot/Screen Recording
 # filenames use U+202F narrow no-break space before AM/PM).
@@ -177,7 +182,14 @@ def tighten_video(video_path: str, output_path: str = "") -> str:
     out = Path(output_path) if output_path else path.with_name(f"{path.stem}.tightened{path.suffix}")
     before = _ffprobe_duration(str(path))
 
-    result = _run([AUTO_EDITOR_BIN, str(path), "-o", str(out), "--no-open"], timeout=1800)
+    # macOS screen recordings are variable-frame-rate; left to its default,
+    # auto-editor times the output timeline off the source's *average* fps,
+    # which lands on an arbitrary non-standard rate (e.g. 52.41) that judders
+    # on playback. Pin the timeline to a standard rate instead.
+    result = _run(
+        [AUTO_EDITOR_BIN, str(path), "-o", str(out), "--no-open", "--frame-rate", str(TIGHTEN_OUTPUT_FPS)],
+        timeout=1800,
+    )
     if result.returncode != 0:
         _log({"tool": "tighten_video", "video_path": video_path, "error": result.stderr[-2000:]})
         return f"Error running auto-editor: {result.stderr[-2000:]}"
