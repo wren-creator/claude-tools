@@ -34,6 +34,12 @@ AUTO_EDITOR_BIN = shutil.which("auto-editor") or str(Path(sys.executable).parent
 # natively supported by YouTube.
 TIGHTEN_OUTPUT_FPS = 60
 
+# auto-editor's own default bitrate (~1.4Mbps observed) is far too low for a
+# high-res screen recording with sharp text - it produces visible blocky
+# compression flicker frame-to-frame. Force a bitrate comfortably above the
+# source's own (~4Mbps for a 3024x1898 capture) instead.
+TIGHTEN_VIDEO_BITRATE = "10M"
+
 # Unicode space variants that look identical to a normal space but break
 # exact-match filename lookups (e.g. macOS Screenshot/Screen Recording
 # filenames use U+202F narrow no-break space before AM/PM).
@@ -185,9 +191,16 @@ def tighten_video(video_path: str, output_path: str = "") -> str:
     # macOS screen recordings are variable-frame-rate; left to its default,
     # auto-editor times the output timeline off the source's *average* fps,
     # which lands on an arbitrary non-standard rate (e.g. 52.41) that judders
-    # on playback. Pin the timeline to a standard rate instead.
+    # on playback. Pin the timeline to a standard rate instead. Also override
+    # auto-editor's own default bitrate, which is too aggressive for detailed
+    # screen-recorded text/UI and produces visible compression-artifact
+    # flicker (see TIGHTEN_VIDEO_BITRATE comment).
     result = _run(
-        [AUTO_EDITOR_BIN, str(path), "-o", str(out), "--no-open", "--frame-rate", str(TIGHTEN_OUTPUT_FPS)],
+        [
+            AUTO_EDITOR_BIN, str(path), "-o", str(out), "--no-open",
+            "--frame-rate", str(TIGHTEN_OUTPUT_FPS),
+            "--video-bitrate", TIGHTEN_VIDEO_BITRATE,
+        ],
         timeout=1800,
     )
     if result.returncode != 0:

@@ -404,8 +404,8 @@ Every call is logged to `youtube_log.jsonl` (gitignored).
   videos in a row against `YOUTUBE_POST_TIMES=10:00,17:00` produced
   2026-07-18 10:00, 2026-07-18 17:00, 2026-07-19 10:00, 2026-07-19 17:00,
   2026-07-20 10:00 — correct 2/day spread with no double-booking.
-- Full pipeline verified end-to-end 2026-07-18 (transcribe → tighten → queue
-  → real OAuth upload), including two fixes found along the way:
+- Full pipeline verified end-to-end 2026-07-18/19 (transcribe → tighten →
+  queue → real OAuth upload), including three fixes found along the way:
   - `tighten_video` called bare `auto-editor` via `subprocess.run`, which
     only exists in this project's `.venv/bin`, not on the MCP server's
     inherited `PATH`. `AUTO_EDITOR_BIN` now resolves it explicitly
@@ -417,6 +417,22 @@ Every call is logged to `youtube_log.jsonl` (gitignored).
     `Path.exists()`. `_resolve_video_path()` now falls back to a
     whitespace-normalized filename match within the same directory across
     all four file-taking tools.
+  - The first real upload flickered and had audio skips. Two compounding
+    causes, both in `tighten_video`'s default `auto-editor` invocation:
+    (1) macOS screen recordings are variable-frame-rate, and left to its
+    default auto-editor timed the output off the source's *average* fps,
+    landing on an arbitrary non-standard rate (52.41fps); (2) auto-editor's
+    default bitrate (~1.4Mbps observed) was far too low for a high-res
+    (3024x1898) screen recording with sharp text, producing visible
+    compression-artifact flicker. Fixing the frame rate alone did not
+    resolve it — the low bitrate was the dominant cause. `tighten_video`
+    now passes `--frame-rate 60` (`TIGHTEN_OUTPUT_FPS`) and `--video-bitrate
+    10M` (`TIGHTEN_VIDEO_BITRATE`, comfortably above the source's own
+    ~4Mbps). Caught only after publishing — a private/scheduled upload with
+    a bad encode isn't something `youtube-bridge` can fix or delete itself
+    (no update/delete tool exists yet, unlike `linkedin-bridge`); both bad
+    uploads had to be deleted by hand in YouTube Studio before their
+    scheduled publish time.
 - Deliberately excluded from `mcpo_config.json`, same rationale as
   `linkedin-bridge` (see mcpo Notes below) — publishing tools stay MCP-only
   so the "confirm before calling" rule can't be bypassed by an HTTP client
@@ -487,9 +503,13 @@ these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
       both work with the `w_member_social` scope this app already has.
 - [x] Add `youtube-bridge`: transcribe/tighten/cut a raw recording, then
       queue it for scheduled upload (YouTube's own `publishAt`, no daemon)
-      with source files auto-moved to `posted/`. Upload/OAuth path not yet
-      verified end-to-end — needs a real Google Cloud OAuth client and a
-      test upload.
+      with source files auto-moved to `posted/`. Upload/OAuth path verified
+      end-to-end with a real upload (see Notes above).
+- [ ] youtube-bridge: add `update_youtube_video` / `delete_youtube_video`
+      (mirroring `linkedin-bridge`'s pattern). Surfaced 2026-07-19 when a
+      bad first upload (flicker/audio-skip from the fps bug, see Notes) sat
+      privately scheduled on YouTube with no way to remove or replace it
+      via MCP — had to be fixed by hand in YouTube Studio.
 - [ ] youtube-bridge: chunked resumable upload with retry, for large files
       or flaky connections (current version sends the whole video in one PUT).
 - [ ] youtube-bridge: thumbnail upload (`thumbnails.set`) once the core
