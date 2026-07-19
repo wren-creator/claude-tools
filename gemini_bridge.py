@@ -11,7 +11,7 @@ mcp = FastMCP("gemini-bridge")
 
 LOG_PATH = Path(__file__).parent / "log.jsonl"
 GEMINI_ENV_FILE = Path.home() / ".gemini" / ".env"
-GEMINI_TIMEOUT = 120
+GEMINI_TIMEOUT = 300
 GIT_TIMEOUT = 30
 MAX_CONTEXT_CHARS = 60_000  # guard against blowing past Gemini's context window
 MAX_FILE_CONTEXT_CHARS = 500_000  # ask_gemini_about_files exists specifically to use Gemini's much larger window
@@ -98,6 +98,16 @@ def ask_gemini(prompt: str, context: str = "") -> str:
     return response
 
 
+def _git_diff(repo_path: str, args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "diff"] + args,
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=GIT_TIMEOUT,
+    )
+
+
 @mcp.tool()
 def review_diff(
     repo_path: str = ".",
@@ -107,22 +117,25 @@ def review_diff(
     Pass the absolute path of the repo currently being worked on as repo_path -
     the bridge runs as its own process and does not share Claude Code's cwd.
     Use before committing to get a second model's opinion on the changes.
+    Checks, in order: uncommitted changes vs HEAD (staged + unstaged together),
+    then staged-only (works even in a repo with zero commits yet), then plain
+    unstaged, so staged-only commits and brand-new repos aren't reported as
+    having nothing to review.
     """
     try:
-        diff = subprocess.run(
-            ["git", "diff"],
-            cwd=repo_path,
-            capture_output=True,
-            text=True,
-            timeout=GIT_TIMEOUT,
-        )
+        # vs HEAD covers staged + unstaged together, but fails with no commits yet
+        diff = _git_diff(repo_path, ["HEAD"])
+        if diff.returncode != 0:
+            diff = _git_diff(repo_path, ["--cached"])
+        if diff.returncode == 0 and not diff.stdout.strip():
+            diff = _git_diff(repo_path, [])
     except FileNotFoundError:
         return f"Error: repo_path '{repo_path}' does not exist or `git` not found"
 
     if diff.returncode != 0:
         return f"Error running git diff: {diff.stderr.strip()}"
     if not diff.stdout.strip():
-        return "No unstaged changes to review."
+        return "No changes to review (checked against HEAD, staged, and unstaged)."
 
     prompt = f"{instructions}\n\n```diff\n{_truncate(diff.stdout)}\n```"
     response = _call_gemini(prompt)
