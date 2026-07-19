@@ -1,6 +1,8 @@
 import json
 import mimetypes
+import shutil
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -21,6 +23,41 @@ HTTP_TIMEOUT = 30
 UPLOAD_TIMEOUT = 1800
 DEFAULT_CATEGORY_ID = "28"  # Science & Technology
 VALID_PRIVACY = {"private", "unlisted", "public"}
+
+# auto-editor is only installed inside this project's venv, not on the
+# MCP server's inherited PATH - resolve it explicitly rather than relying
+# on PATH to include .venv/bin.
+AUTO_EDITOR_BIN = shutil.which("auto-editor") or str(Path(sys.executable).parent / "auto-editor")
+
+# Unicode space variants that look identical to a normal space but break
+# exact-match filename lookups (e.g. macOS Screenshot/Screen Recording
+# filenames use U+202F narrow no-break space before AM/PM).
+_SPACE_VARIANTS = (" ", " ", " ", " ")
+
+
+def _normalize_spaces(name: str) -> str:
+    for ch in _SPACE_VARIANTS:
+        name = name.replace(ch, " ")
+    return name
+
+
+def _resolve_video_path(video_path: str) -> Path | None:
+    """Resolve a video path, tolerating unicode space variants that get
+    silently flattened to a regular space when a path is retyped instead
+    of copied from a directory listing.
+    """
+    path = Path(video_path)
+    if path.exists():
+        return path
+
+    parent = path.parent
+    if not parent.exists():
+        return None
+    target = _normalize_spaces(path.name)
+    for candidate in parent.iterdir():
+        if candidate.is_file() and _normalize_spaces(candidate.name) == target:
+            return candidate
+    return None
 
 
 def _log(entry: dict) -> None:
@@ -93,8 +130,8 @@ def transcribe_video(video_path: str) -> str:
     mistakes, rambling) and pass those as `keep_segments` to cut_video -
     this tool only transcribes, it does not decide or execute cuts.
     """
-    path = Path(video_path)
-    if not path.exists():
+    path = _resolve_video_path(video_path)
+    if path is None:
         return f"Error: {video_path} does not exist"
 
     try:
@@ -133,14 +170,14 @@ def tighten_video(video_path: str, output_path: str = "") -> str:
 
     Returns the output path and the before/after duration.
     """
-    path = Path(video_path)
-    if not path.exists():
+    path = _resolve_video_path(video_path)
+    if path is None:
         return f"Error: {video_path} does not exist"
 
     out = Path(output_path) if output_path else path.with_name(f"{path.stem}.tightened{path.suffix}")
     before = _ffprobe_duration(str(path))
 
-    result = _run(["auto-editor", str(path), "-o", str(out), "--no-open"], timeout=1800)
+    result = _run([AUTO_EDITOR_BIN, str(path), "-o", str(out), "--no-open"], timeout=1800)
     if result.returncode != 0:
         _log({"tool": "tighten_video", "video_path": video_path, "error": result.stderr[-2000:]})
         return f"Error running auto-editor: {result.stderr[-2000:]}"
@@ -162,8 +199,8 @@ def cut_video(video_path: str, keep_segments: list[list[float]], output_path: st
     rambling), don't try to do frame-level trimming by hand; this tool does
     the actual mechanical execution via ffmpeg.
     """
-    path = Path(video_path)
-    if not path.exists():
+    path = _resolve_video_path(video_path)
+    if path is None:
         return f"Error: {video_path} does not exist"
     if not keep_segments:
         return "Error: keep_segments is empty"
@@ -278,8 +315,8 @@ def queue_video_for_upload(
     Requires YOUTUBE_CLIENT_ID / YOUTUBE_CLIENT_SECRET / YOUTUBE_REFRESH_TOKEN
     in ~/.youtube/.env, set up via youtube_oauth_setup.py.
     """
-    path = Path(video_path)
-    if not path.exists():
+    path = _resolve_video_path(video_path)
+    if path is None:
         return f"Error: {video_path} does not exist"
 
     env = _load_env()
