@@ -83,7 +83,7 @@ was asked and answered.
 
 ## ollama-bridge
 
-Exposes one tool backed by a locally running [Ollama](https://ollama.com)
+Exposes two tools backed by a locally running [Ollama](https://ollama.com)
 instance:
 
 - `prefilter_diff(repo_path, model="qwen2.5-coder:7b")` — runs `git diff` in
@@ -92,6 +92,14 @@ instance:
   starts with `CLEAN:` or `FLAGGED:` — only escalate to `review_diff` when
   it's `FLAGGED`, or when this tool errors (e.g. Ollama isn't running); never
   skip review outright just because the local pass errored.
+- `triage_log(repo_path, log_path, model="qwen2.5-coder:7b")` — reads a
+  build/test log already written to disk (redirect a failing command's
+  output first, e.g. `cmd > out.log 2>&1`) and sends it to a local Ollama
+  model to pull out just the root failure (`FILE:`/`ERROR:`/`CONTEXT:`),
+  instead of reading the whole raw log directly. Returns `NO FAILURE
+  FOUND.` for a clean run. `log_path` must resolve inside `repo_path`
+  (absolute or relative, same containment rule as `repo-bridge`'s
+  `get_file`) — rejected otherwise.
 
 Every call is logged to `ollama_log.jsonl` (gitignored) as an audit trail.
 
@@ -139,6 +147,39 @@ Every call is logged to `ollama_log.jsonl` (gitignored) as an audit trail.
   deepseek-coder, plus several custom personas) that reports tool-use/code
   capability rather than plain chat completion — override via `model` for
   a different local model.
+- `triage_log` reads an existing log file rather than executing a command
+  itself — deliberately, to keep this bridge's subprocess surface limited
+  to `git diff` (a fixed, safe command) rather than adding an
+  arbitrary-command-execution tool. Redirect a failing command's output to
+  a file first (`cmd > out.log 2>&1`), then triage that.
+- `triage_log` truncates from the **start** of the log via
+  `_truncate_keep_tail`, the opposite of `prefilter_diff`'s
+  `_truncate` — a build/test failure is almost always near the end of a
+  log (the start is setup noise: dependency resolution, banners), unlike a
+  diff where head-truncation is fine. Uses a larger `num_ctx: 24576`
+  (`LOG_NUM_CTX`) than `prefilter_diff`'s `8192` since `MAX_LOG_CHARS`
+  (40k chars) needs more headroom than a same-ratio scale-up would give —
+  `review_diff` flagged that 40k chars could run denser than ~2 chars/token
+  on symbol-heavy logs, so `LOG_NUM_CTX` was set with margin rather than
+  scaled proportionally to `prefilter_diff`'s ratio.
+- `triage_log` requires `repo_path` and resolves `log_path` inside it via
+  the same `_resolve_in_repo` containment check `repo-bridge` uses for
+  `get_file` — added after `review_diff` flagged the first draft (a bare
+  `log_path` with no scoping) as an arbitrary-file-read risk: an
+  unscoped path could be pointed at `~/.ssh`, `.env` files, etc.
+- `_call_ollama`'s `URLError` handler checks `isinstance(e.reason,
+  TimeoutError)` before the generic `OSError` check — `review_diff` caught
+  that a real (slow-but-reachable-Ollama) timeout is itself an `OSError`
+  subclass, so without checking `TimeoutError` first it was misreported as
+  "not reachable - is `ollama serve` running?" instead of a timeout.
+- `triage_log` always appends a pointer back to the full `log_path` and
+  line/char count alongside the model's summary — a 7B model can
+  misidentify the root cause in a complex multi-error log, so the raw log
+  stays one `Read` away rather than being fully replaced by the summary.
+- Verified against a synthetic pytest log (42 tests, 1 real failure buried
+  in passing-test noise): correctly extracted the failing file/line, exact
+  `AssertionError`, and relevant traceback lines, ignoring the noise. A
+  second synthetic clean-run log correctly returned `NO FAILURE FOUND.`
 
 ## tn3270-bridge
 
@@ -605,3 +646,8 @@ these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
       model (`qwen2.5-coder:7b`), so routine diffs get a free/offline triage
       pass before spending a `review_diff` (Gemini) call — only escalate
       when it comes back `FLAGGED`. Verified end-to-end 2026-07-24.
+- [x] ollama-bridge: add `triage_log`, a second tool that extracts just the
+      root failure (`FILE:`/`ERROR:`/`CONTEXT:`) from a build/test log file
+      via the same local model, instead of reading the whole raw log.
+      Verified end-to-end 2026-07-24 against synthetic pytest logs (one
+      failing, one clean).
