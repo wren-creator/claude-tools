@@ -81,6 +81,65 @@ was asked and answered.
   after pulling this change, since the running server process won't pick it
   up otherwise.
 
+## ollama-bridge
+
+Exposes one tool backed by a locally running [Ollama](https://ollama.com)
+instance:
+
+- `prefilter_diff(repo_path, model="qwen2.5-coder:7b")` — runs `git diff` in
+  `repo_path` and sends it to a local Ollama model for a cheap first-pass
+  triage before spending a `review_diff` (Gemini) call on it. The response
+  starts with `CLEAN:` or `FLAGGED:` — only escalate to `review_diff` when
+  it's `FLAGGED`, or when this tool errors (e.g. Ollama isn't running); never
+  skip review outright just because the local pass errored.
+
+Every call is logged to `ollama_log.jsonl` (gitignored) as an audit trail.
+
+### Setup
+
+1. Install [Ollama](https://ollama.com) and pull a coding-capable model:
+   ```
+   ollama pull qwen2.5-coder:7b
+   ```
+2. This tool has no new dependency beyond what's already in
+   `requirements.txt` — it talks to Ollama's local REST API with the
+   standard library's `urllib`, consistent with the rest of this repo's
+   bridges.
+3. Register the server with Claude Code (user scope):
+   ```
+   claude mcp add ollama-bridge --scope user -- \
+     ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/ollama_bridge.py
+   ```
+4. Restart Claude Code / reload the window. `prefilter_diff` should show up
+   as a callable tool.
+
+### Notes
+
+- This exists to save Gemini API calls on routine commits, not to replace
+  `review_diff`. A quantized 7B local model catches the obvious stuff (dead
+  code, naming, syntax slips) but reliably misses subtler bugs and security
+  issues a frontier model catches — treat a `CLEAN` verdict as "nothing
+  obvious jumped out," not "safe to skip a real review," for anything
+  consequential.
+- Reuses `review_diff`'s own diff-selection order (vs HEAD, then staged
+  `--cached`, then plain unstaged) so both tools always look at the same
+  diff.
+- `_call_ollama` sets an explicit `num_ctx: 8192` on every request. Ollama
+  defaults to 2048 regardless of the model's real context length, which
+  would silently left-truncate any diff near `MAX_CONTEXT_CHARS` and drop
+  `PREFILTER_INSTRUCTIONS` entirely — caught by `review_diff` on this
+  tool's own first commit before it ever shipped. `temperature: 0.0` is set
+  alongside it for a more consistent CLEAN/FLAGGED verdict.
+- Verified end-to-end against this repo's own pending `README.md` diff on
+  2026-07-24: `prefilter_diff` picked up the real diff and returned a
+  `CLEAN` verdict from `qwen2.5-coder:7b` running locally — call and
+  response both landed in `ollama_log.jsonl` as expected.
+- `qwen2.5-coder:7b` was picked as the default because it's the only
+  locally installed model (of qwen2.5-coder, dolphin-mistral, llama3,
+  deepseek-coder, plus several custom personas) that reports tool-use/code
+  capability rather than plain chat completion — override via `model` for
+  a different local model.
+
 ## tn3270-bridge
 
 Exposes five tools backed by [py3270](https://pypi.org/project/py3270/) (which
@@ -527,6 +586,12 @@ these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
       auto-editor's re-encode (raw unedited upload of the same recording had
       no artifact), but not yet which part of auto-editor's pipeline is at
       fault. Currently disabled, returns an error instead of running.
+- [ ] linkedin-bridge: scheduled posting. LinkedIn's API has no server-side
+      scheduled publish for personal profiles (that's a Company Page /
+      Campaign Manager feature), so this would need Claude-side scheduling
+      (a cron routine calling `post_to_linkedin` at a set time) with
+      pre-approved text, mirroring `youtube-bridge`'s `publishAt` pattern
+      but without native platform support. Surfaced 2026-07-21.
 - [ ] youtube-bridge: chunked resumable upload with retry, for large files
       or flaky connections (current version sends the whole video in one PUT).
 - [ ] youtube-bridge: thumbnail upload (`thumbnails.set`) once the core
@@ -536,3 +601,7 @@ these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
       LinkedIn, no ETA** — that permission is currently closed to all new
       access requests, not just under heavy review, so there's nothing to
       do here until that changes.
+- [x] Add `ollama-bridge`: a `prefilter_diff` tool backed by a local Ollama
+      model (`qwen2.5-coder:7b`), so routine diffs get a free/offline triage
+      pass before spending a `review_diff` (Gemini) call — only escalate
+      when it comes back `FLAGGED`. Verified end-to-end 2026-07-24.
