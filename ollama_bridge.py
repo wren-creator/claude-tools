@@ -41,6 +41,23 @@ TRIAGE_INSTRUCTIONS = (
     "'NO FAILURE FOUND.' and nothing else."
 )
 
+TRANSCRIPT_TRIAGE_INSTRUCTIONS = (
+    "You are triaging a raw speech transcript from a video-editing pipeline "
+    "for a coding agent that can't afford to read the whole thing closely. "
+    "Flag candidate spots that likely need a cut: false starts/restarts (the "
+    "same sentence or phrase said again shortly after), long filler-heavy or "
+    "rambling stretches, and anything that reads like dead air or an aborted "
+    "take. Reply in exactly this format:\n"
+    "FLAGGED: <one-line summary>\n"
+    "[MM:SS-MM:SS] <reason>\n"
+    "[MM:SS-MM:SS] <reason>\n"
+    "...\n"
+    "If nothing stands out (reads like one clean continuous take), reply "
+    "exactly 'CLEAN: no obvious restarts, filler, or dead air found.' and "
+    "nothing else. Be terse - this points at trouble spots, it doesn't "
+    "decide the actual cuts."
+)
+
 
 def _log(entry: dict) -> None:
     entry["timestamp"] = time.time()
@@ -61,6 +78,11 @@ def _truncate_keep_tail(text: str, limit: int = MAX_LOG_CHARS) -> str:
     if len(text) <= limit:
         return text
     return f"[... truncated {len(text) - limit} chars from the start ...]\n\n" + text[-limit:]
+
+
+def _fmt_ts(seconds: float) -> str:
+    m, s = divmod(int(seconds), 60)
+    return f"{m:02d}:{s:02d}"
 
 
 def _resolve_in_repo(repo_path: str, path: str) -> Path | None:
@@ -212,6 +234,65 @@ def triage_log(repo_path: str, log_path: str, model: str = DEFAULT_MODEL) -> str
         f"(Triaged from {line_count} lines / {len(text)} chars at "
         f"'{log_path}' - re-read it directly if this summary looks "
         f"incomplete or wrong.)"
+    )
+
+
+@mcp.tool()
+def triage_transcript(repo_path: str, transcript_path: str, model: str = DEFAULT_MODEL) -> str:
+    """Read a transcript JSON file written by youtube-bridge's
+    transcribe_video (a list of {start, end, text} segments) and send it to
+    a local Ollama model to flag likely restarts, filler-heavy stretches,
+    and dead air, instead of the agent reading the whole transcript closely
+    to spot them itself. Pass the absolute path of the video's project
+    folder as repo_path, and transcript_path as either an absolute path or
+    one relative to repo_path - same containment rule as triage_log,
+    rejected if it escapes repo_path.
+
+    Returns a list of flagged [MM:SS-MM:SS] spots with a one-line reason
+    each, or 'CLEAN: ...' if nothing stands out. This does not decide cuts -
+    use it to know where to look closely in transcribe_video's own output
+    before building keep_segments for cut_video, not as a substitute for
+    reading the flagged spots yourself. A 7B model can miss things or flag
+    false positives in a long transcript, treat this as a first pass, and if
+    it comes back CLEAN on a take you know had issues, fall back to reading
+    the full transcript.
+    """
+    target = _resolve_in_repo(repo_path, transcript_path)
+    if target is None:
+        return f"Error: '{transcript_path}' escapes repo_path"
+
+    try:
+        raw = target.read_text(errors="replace")
+    except OSError as e:
+        return f"Error reading '{transcript_path}': {e}"
+
+    try:
+        entries = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return f"Error: '{transcript_path}' is not valid JSON: {e}"
+
+    if not entries:
+        return f"'{transcript_path}' has no segments - nothing to triage."
+
+    formatted = "\n".join(
+        f"[{_fmt_ts(e['start'])} - {_fmt_ts(e['end'])}] {e['text']}" for e in entries
+    )
+
+    prompt = f"{TRANSCRIPT_TRIAGE_INSTRUCTIONS}\n\n```\n{_truncate(formatted)}\n```"
+    response = _call_ollama(prompt, model)
+    _log({
+        "tool": "triage_transcript",
+        "repo_path": repo_path,
+        "transcript_path": transcript_path,
+        "model": model,
+        "segment_count": len(entries),
+        "response": response,
+    })
+    return (
+        f"{response}\n\n"
+        f"(Triaged from {len(entries)} segments at '{transcript_path}' - "
+        f"read the full transcript around any flagged timestamp before "
+        f"deciding keep_segments.)"
     )
 
 

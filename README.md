@@ -83,7 +83,7 @@ was asked and answered.
 
 ## ollama-bridge
 
-Exposes two tools backed by a locally running [Ollama](https://ollama.com)
+Exposes three tools backed by a locally running [Ollama](https://ollama.com)
 instance:
 
 - `prefilter_diff(repo_path, model="qwen2.5-coder:7b")` — runs `git diff` in
@@ -100,6 +100,15 @@ instance:
   FOUND.` for a clean run. `log_path` must resolve inside `repo_path`
   (absolute or relative, same containment rule as `repo-bridge`'s
   `get_file`) — rejected otherwise.
+- `triage_transcript(repo_path, transcript_path, model="qwen2.5-coder:7b")`
+  — reads a transcript JSON file already written by `youtube-bridge`'s
+  `transcribe_video` (a list of `{start, end, text}` segments) and sends it
+  to a local Ollama model to flag likely restarts, filler-heavy stretches,
+  and dead air, instead of reading the whole transcript closely to spot
+  them. Returns `[MM:SS-MM:SS]` timestamps with a one-line reason each, or
+  `CLEAN: ...` if nothing stands out. Same `repo_path`/`transcript_path`
+  containment rule as `triage_log`. Doesn't decide cuts — points at where to
+  look before building `keep_segments` for `cut_video`.
 
 Every call is logged to `ollama_log.jsonl` (gitignored) as an audit trail.
 
@@ -180,6 +189,17 @@ Every call is logged to `ollama_log.jsonl` (gitignored) as an audit trail.
   in passing-test noise): correctly extracted the failing file/line, exact
   `AssertionError`, and relevant traceback lines, ignoring the noise. A
   second synthetic clean-run log correctly returned `NO FAILURE FOUND.`
+- `triage_transcript` (added 2026-08-06) reuses `_resolve_in_repo` from
+  `triage_log` and `_truncate` from `prefilter_diff` rather than adding new
+  helpers — a transcript is closer to a diff than a log for truncation
+  purposes (an issue can be anywhere in it, not clustered near the end), so
+  head-truncation is the right default, not `triage_log`'s tail-keeping
+  one. Verified end-to-end against a synthetic 7-segment transcript
+  containing one obvious mid-sentence restart and one filler-heavy stretch
+  ("um, so, yeah, so basically, um") — `qwen2.5-coder:7b` flagged both
+  correctly with their timestamps. Does not decide `keep_segments` itself,
+  by design — `cut_video`'s docstring is explicit that cut decisions belong
+  to the agent reading the actual transcript, not a local model summary.
 
 ## tn3270-bridge
 
@@ -685,11 +705,13 @@ these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
       tested against synthetic screen data only, not yet verified against a
       live host (see Notes above) — no test mainframe was reachable in this
       environment.
-- [ ] youtube-bridge: transcript triage. `transcribe_video` hands back the
-      full transcript for edit decisions; add a local-model (ollama-bridge)
-      pass that segments it into topic/timestamp chunks so `tighten_video`/
-      `cut_video` calls don't need the whole raw transcript in context.
-      Surfaced 2026-08-06, ranked #2.
+- [x] ollama-bridge: add `triage_transcript`, flagging likely restarts/
+      filler/dead-air spots in a youtube-bridge transcript instead of the
+      agent reading the whole thing closely to find them. Doesn't replace
+      transcribe_video's full transcript (cut_video's docstring is explicit
+      that cut decisions need the agent reading the real thing), it points
+      at where to look first. Surfaced 2026-08-06, ranked #2. Verified
+      end-to-end against a synthetic transcript with a real Ollama call.
 - [ ] New slack-digest-bridge (or extend an existing bridge): local-model
       digest of a Slack thread (decisions/action-items/blockers) before it
       hits agent context. Needs its own Slack app/bot token to fetch thread
