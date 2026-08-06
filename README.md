@@ -183,7 +183,7 @@ Every call is logged to `ollama_log.jsonl` (gitignored) as an audit trail.
 
 ## tn3270-bridge
 
-Exposes five tools backed by [py3270](https://pypi.org/project/py3270/) (which
+Exposes six tools backed by [py3270](https://pypi.org/project/py3270/) (which
 drives `s3270` under the hood) for automating TN3270 mainframe green-screen
 sessions:
 
@@ -199,6 +199,17 @@ sessions:
   hidden password field) rather than just what's on screen. Row/col are
   1-indexed and refer to the field's attribute-byte position, so the first
   typeable character is one column to the right of `col`.
+- `read_panel_state(session_id)` — returns a compact JSON summary instead of
+  a full screen dump: `{"messages": [{"id", "severity", "text"}, ...],
+  "actionable_inputs": [{"label", "row", "col", "hidden"}, ...], "cursor":
+  {"row", "col"}}`. `messages` is every line starting with a standard IBM
+  message ID (`ICH408I`, `IKJ56650I`, etc.) — RACF/TSO/JES errors and status
+  lines all follow that shape, so this generalizes across products instead
+  of needing a per-panel lookup table. `actionable_inputs` is every
+  unprotected field with a best-guess label pulled from the protected field
+  immediately before it (e.g. `"Userid ===>"` next to the input). Use this
+  instead of `read_screen` when the agent just needs to know what the
+  screen says and where to type, not the full layout.
 - `send_function_key(session_id, key)` — sends `PFn`/`PAn`/`Clear`/`Enter`.
   Returns the resulting screen.
 - `disconnect(session_id)` — closes the session.
@@ -239,13 +250,23 @@ letting it leak. Every call is logged to `tn3270_log.jsonl` (gitignored).
   (Cursor)` is 0-indexed) — `_structured_screen()` normalizes both to
   1-indexed. Confirmed by checking the cursor lands one column past an
   unprotected field's attribute byte, which is where typing actually starts.
-- All five tools have been exercised against a live TN3270 host (a local
-  test mainframe on `localhost:3270`): `connect` + `read_screen` pulled back
-  the logon banner, `send_keys("TSO\n")` advanced from the logon-type prompt
-  to the TSO/E LOGON screen, `send_function_key("PF3")` logged off back to
-  the banner, and structured `read_screen` correctly identified the one
-  unprotected field on the banner screen and the hidden password fields on
-  the TSO/E LOGON screen.
+- The first five tools have been exercised against a live TN3270 host (a
+  local test mainframe on `localhost:3270`): `connect` + `read_screen`
+  pulled back the logon banner, `send_keys("TSO\n")` advanced from the
+  logon-type prompt to the TSO/E LOGON screen, `send_function_key("PF3")`
+  logged off back to the banner, and structured `read_screen` correctly
+  identified the one unprotected field on the banner screen and the hidden
+  password fields on the TSO/E LOGON screen.
+- `read_panel_state` (added 2026-08-06) has **not** been verified against a
+  live host in this environment — no test mainframe was reachable, only unit
+  tested against synthetic screen data (a fabricated RACF-style logon
+  denial: `ICH70001I`/`ICH408I` message lines plus `Userid`/`Password`
+  fields), which it parsed correctly. The message-ID regex is based on IBM's
+  documented, standardized message format, and the label heuristic matches
+  every real panel layout seen in this repo's earlier live testing, but both
+  should be treated as unverified against a real host until run against
+  one. `actionable_inputs` labels are a best guess, not authoritative — fall
+  back to structured `read_screen` if a label looks wrong.
 
 ## repo-bridge
 
@@ -657,13 +678,13 @@ these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
       via the same local model, instead of reading the whole raw log.
       Verified end-to-end 2026-07-24 against synthetic pytest logs (one
       failing, one clean).
-- [ ] tn3270-bridge: panel-state abstractor. `read_screen(structured=True)`
-      already gives field positions, but it's still a full screen dump the
-      agent has to re-parse every step. Add a mode that maps known panel IDs
-      and error text to a compact status object (`{panel, error,
-      actionable_inputs}`) instead. Surfaced 2026-08-06 brainstorming session
-      on cutting agent token load; ranked #1 since RACF/TSO work re-reads the
-      same handful of panels repeatedly.
+- [x] tn3270-bridge: panel-state abstractor. Added `read_panel_state`, which
+      extracts IBM message-ID lines (`ICH408I`, etc.) and unprotected fields
+      with best-guess labels instead of a full screen dump. Surfaced
+      2026-08-06 brainstorming session on cutting agent token load. Unit
+      tested against synthetic screen data only, not yet verified against a
+      live host (see Notes above) — no test mainframe was reachable in this
+      environment.
 - [ ] youtube-bridge: transcript triage. `transcribe_video` hands back the
       full transcript for edit decisions; add a local-model (ollama-bridge)
       pass that segments it into topic/timestamp chunks so `tighten_video`/

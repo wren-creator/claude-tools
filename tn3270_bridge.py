@@ -14,6 +14,27 @@ CONNECT_TIMEOUT = 15
 
 _SF_RE = re.compile(r"SF\(([^)]*)\)")
 
+# IBM message IDs follow a standard shape across RACF/TSO/JES/VTAM/etc.:
+# a 2-4 letter product prefix, digits, and a one-or-two letter severity
+# suffix (e.g. ICH408I, IKJ56650I, IEF456I, IST663I), always at the start
+# of the line they appear on. This is what lets panel-state extraction work
+# generically across products instead of needing a per-panel lookup table.
+_MSGID_RE = re.compile(r"^\s*([A-Z]{2,4}\d{3,5}([A-Z]{1,2})?)\b\s*(.*)")
+
+_SEVERITY_BY_SUFFIX = {
+    "I": "info",
+    "W": "warning",
+    "E": "error",
+    "S": "severe",
+    "A": "action",
+    "T": "terminating",
+    "C": "critical",
+}
+
+# Punctuation mainframe screens commonly use after an input prompt label
+# (e.g. "Userid ===>", "New Password:") - stripped so labels read cleanly.
+_LABEL_TRAILING_RE = re.compile(r"[\s:=>\-]+$")
+
 # session_id -> py3270.Emulator. This process is long-lived (one per Claude
 # Code session), so sessions persist across tool calls until disconnect() or
 # the server itself is restarted.
@@ -105,6 +126,50 @@ def _structured_screen(emulator: py3270.Emulator) -> dict:
     return {"cursor": cursor, "fields": fields}
 
 
+def _extract_messages(plain_text: str) -> list[dict]:
+    messages = []
+    for line in plain_text.splitlines():
+        m = _MSGID_RE.match(line)
+        if not m:
+            continue
+        msg_id, suffix, rest = m.group(1), m.group(2), m.group(3)
+        severity = _SEVERITY_BY_SUFFIX.get((suffix or "")[-1:], "unknown")
+        messages.append({"id": msg_id, "severity": severity, "text": rest.strip()})
+    return messages
+
+
+def _extract_actionable_inputs(fields: list[dict]) -> list[dict]:
+    # Mainframe screens conventionally put a field's label immediately
+    # before it in scan order (same row, to the left) - "Userid ===>" as a
+    # protected field followed by the unprotected input field. There's no
+    # structural link between the two in the 3270 buffer itself, so this is
+    # a heuristic, not a guarantee, but it matches the layout every
+    # TSO/RACF/ISPF panel observed so far uses.
+    inputs = []
+    last_label = None
+    for field in fields:
+        if field["protected"]:
+            if field["text"]:
+                last_label = _LABEL_TRAILING_RE.sub("", field["text"]).strip() or None
+            continue
+        inputs.append({
+            "label": last_label,
+            "row": field["row"],
+            "col": field["col"],
+            "hidden": field["hidden"],
+        })
+        last_label = None
+    return inputs
+
+
+def _panel_state(plain_text: str, structured: dict) -> dict:
+    return {
+        "messages": _extract_messages(plain_text),
+        "actionable_inputs": _extract_actionable_inputs(structured["fields"]),
+        "cursor": structured["cursor"],
+    }
+
+
 @mcp.tool()
 def connect(host: str, port: int = 23) -> str:
     """Open a TN3270 session to a mainframe host and return a session_id.
@@ -170,6 +235,37 @@ def read_screen(session_id: str, structured: bool = False) -> str:
 
     _log({"tool": "read_screen", "session_id": session_id, "structured": structured, "screen": screen})
     return screen
+
+
+@mcp.tool()
+def read_panel_state(session_id: str) -> str:
+    """Return a compact JSON summary of the current screen instead of the
+    full screen dump: {"messages": [{"id", "severity", "text"}, ...],
+    "actionable_inputs": [{"label", "row", "col", "hidden"}, ...], "cursor":
+    {"row", "col"}}. "messages" is every line starting with a standard IBM
+    message ID (e.g. ICH408I, IKJ56650I), which is where RACF/TSO/JES
+    errors and prompts show up. "actionable_inputs" is every unprotected
+    field with its best-guess label, pulled from the protected field
+    immediately before it. Use this instead of read_screen when you just
+    need to know what the screen is telling you and where to type, not the
+    full layout - it's a heuristic reading of the screen, not authoritative,
+    so fall back to read_screen(structured=True) if a label looks wrong or
+    a field you need isn't showing up.
+    """
+    emulator = _get_session(session_id)
+    if emulator is None:
+        return f"Error: no active session with id {session_id}"
+
+    try:
+        plain_text = _dump_screen(emulator)
+        structured = _structured_screen(emulator)
+        state = json.dumps(_panel_state(plain_text, structured))
+    except Exception as e:
+        _log({"tool": "read_panel_state", "session_id": session_id, "error": str(e)})
+        return f"Error reading panel state: {e}"
+
+    _log({"tool": "read_panel_state", "session_id": session_id, "state": state})
+    return state
 
 
 @mcp.tool()
