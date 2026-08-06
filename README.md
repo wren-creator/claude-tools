@@ -395,6 +395,12 @@ Every call is logged to `linkedin_log.jsonl` (gitignored) as an audit trail.
   successfully via `post_to_linkedin`, then updated via `update_linkedin_post`
   (tested with the full URL form) and deleted via `delete_linkedin_post`
   (tested with the bare URN form) - both input styles work.
+- The `Linkedin-Version` header is pinned to the previous month
+  (`_linkedin_api_version()`), not the current one. LinkedIn versions its
+  REST API by month, but a brand-new monthly version isn't always live in
+  production right at the start of that month, requests using the current
+  month's version have come back with a 426 NONEXISTENT_VERSION error, while
+  the previous month's version is always already rolled out.
 
 ## youtube-bridge
 
