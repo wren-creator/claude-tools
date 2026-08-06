@@ -657,3 +657,22 @@ these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
       via the same local model, instead of reading the whole raw log.
       Verified end-to-end 2026-07-24 against synthetic pytest logs (one
       failing, one clean).
+- [ ] tn3270-bridge: panel-state abstractor. `read_screen(structured=True)`
+      already gives field positions, but it's still a full screen dump the
+      agent has to re-parse every step. Add a mode that maps known panel IDs
+      and error text to a compact status object (`{panel, error,
+      actionable_inputs}`) instead. Surfaced 2026-08-06 brainstorming session
+      on cutting agent token load; ranked #1 since RACF/TSO work re-reads the
+      same handful of panels repeatedly.
+- [ ] youtube-bridge: transcript triage. `transcribe_video` hands back the
+      full transcript for edit decisions; add a local-model (ollama-bridge)
+      pass that segments it into topic/timestamp chunks so `tighten_video`/
+      `cut_video` calls don't need the whole raw transcript in context.
+      Surfaced 2026-08-06, ranked #2.
+- [ ] New slack-digest-bridge (or extend an existing bridge): local-model
+      digest of a Slack thread (decisions/action-items/blockers) before it
+      hits agent context. Needs its own Slack app/bot token to fetch thread
+      content server-side, since the hosted Slack connector already returns
+      raw messages into context by the time the agent sees them, so it can't
+      be the fetch path for this tool. Surfaced 2026-08-06, ranked #3, blocked
+      on creating that Slack app/bot and deciding scopes.
