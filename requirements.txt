@@ -13,3 +13,4 @@ tree-sitter-cpp
 mcpo
 faster-whisper
 auto-editor
+google-genai

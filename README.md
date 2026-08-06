@@ -596,6 +596,60 @@ Every call is logged to `youtube_log.jsonl` (gitignored).
   so the "confirm before calling" rule can't be bypassed by an HTTP client
   holding the proxy's API key.
 
+## image-bridge
+
+Exposes one tool backed by Gemini's native image model
+(`gemini-2.5-flash-image`), reusing the same `GEMINI_API_KEY` as
+`gemini-bridge`:
+
+- `generate_image(prompt, output_path, reference_image_paths=[])` —
+  generates an image and saves it to `output_path` (absolute path, `.png` or
+  `.jpg`). Pass `reference_image_paths` (absolute paths to existing images)
+  to guide style, character likeness, and composition against those
+  references, e.g. an existing book cover, so a series of illustrations
+  actually looks like one book instead of restarting the style from scratch
+  on every call. Returns the saved path on success.
+
+Every call is logged to `log.jsonl` (shared with `gemini-bridge`, gitignored)
+as an audit trail.
+
+### Setup
+
+1. Same `GEMINI_API_KEY` as `gemini-bridge` (see its Setup section) — no
+   separate credential needed.
+2. Install this project's dependencies (shared `.venv`, `google-genai` is in
+   `requirements.txt`):
+   ```
+   cd ~/git/claude-tools
+   .venv/bin/pip install -r requirements.txt
+   ```
+3. Register the server with Claude Code:
+   ```
+   claude mcp add image-bridge --scope user -- \
+     ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/image_bridge.py
+   ```
+4. Restart Claude Code / reload the window.
+
+### Notes
+
+- Uses the `google-genai` SDK directly (not the `gemini` CLI `gemini-bridge`
+  shells out to) — the CLI has no image-generation flag, so this calls
+  `models.generate_content` against `gemini-2.5-flash-image` itself,
+  multimodal in: text prompt plus zero or more reference images as inline
+  bytes, image out: the first `inline_data` part found in the response.
+- **Blocked on billing as of 2026-08-06.** The free tier of the API key in
+  `~/.gemini/.env` has a hard `0` request/token quota specifically for
+  `gemini-2.5-flash-image` (confirmed via a live test call: clean HTTP round
+  trip, clear `429 RESOURCE_EXHAUSTED` response naming that exact quota) —
+  every other quota on that key allows normal usage, this one model's free
+  allowance is zero, not low. The code path itself is verified working end
+  to end (request sent, error correctly parsed and returned, no image
+  written), it just cannot succeed until billing is enabled on the Google
+  AI Studio / Cloud project tied to that key.
+- No image was actually generated or shipped anywhere as of this note —
+  everything above the Blocked line is verified-working plumbing, not a
+  verified-working image.
+
 ## mcpo proxy
 
 Fronts `gemini-bridge`, `tn3270-bridge`, and `repo-bridge` with
@@ -712,6 +766,14 @@ these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
       that cut decisions need the agent reading the real thing), it points
       at where to look first. Surfaced 2026-08-06, ranked #2. Verified
       end-to-end against a synthetic transcript with a real Ollama call.
+- [ ] image-bridge: **blocked on billing.** Built `generate_image` against
+      Gemini's native image model (`gemini-2.5-flash-image`), code path
+      verified end-to-end (clean request, correctly parsed `429
+      RESOURCE_EXHAUSTED` error), but the free-tier API key has a hard `0`
+      quota for that specific model. Needs billing enabled on the Google AI
+      Studio / Cloud project before a real image can be generated. Surfaced
+      2026-08-06 while building interior illustrations for a children's
+      book manuscript.
 - [ ] New slack-digest-bridge (or extend an existing bridge): local-model
       digest of a Slack thread (decisions/action-items/blockers) before it
       hits agent context. Needs its own Slack app/bot token to fetch thread
