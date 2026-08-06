@@ -1,3 +1,4 @@
+import datetime
 import json
 import re
 import time
@@ -47,6 +48,22 @@ def _load_credentials() -> dict:
             key, _, value = line.partition("=")
             env[key.strip()] = value.strip()
     return env
+
+
+def _linkedin_api_version() -> str:
+    """LinkedIn versions its REST API by month (YYYYMM). A brand-new monthly
+    version isn't always active in production right at the start of that
+    month (observed: current-month requests got a 426 NONEXISTENT_VERSION
+    with LinkedIn's internal date marker for that version in the message),
+    so request the previous month's version instead, it's always already
+    rolled out.
+    """
+    today = datetime.date.today()
+    year, month = today.year, today.month - 1
+    if month == 0:
+        month = 12
+        year -= 1
+    return f"{year:04d}{month:02d}"
 
 
 def _extract_urn(post_url_or_urn: str) -> str | None:
@@ -114,7 +131,7 @@ def post_to_linkedin(text: str, visibility: str = "PUBLIC") -> str:
     req.add_header("Authorization", f"Bearer {access_token}")
     req.add_header("Content-Type", "application/json")
     req.add_header("X-Restli-Protocol-Version", "2.0.0")
-    req.add_header("Linkedin-Version", time.strftime("%Y%m"))
+    req.add_header("Linkedin-Version", _linkedin_api_version())
 
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
@@ -163,7 +180,7 @@ def update_linkedin_post(post_url_or_urn: str, text: str) -> str:
     req.add_header("Authorization", f"Bearer {access_token}")
     req.add_header("Content-Type", "application/json")
     req.add_header("X-Restli-Protocol-Version", "2.0.0")
-    req.add_header("Linkedin-Version", time.strftime("%Y%m"))
+    req.add_header("Linkedin-Version", _linkedin_api_version())
     req.add_header("X-RestLi-Method", "PARTIAL_UPDATE")
 
     try:
@@ -203,7 +220,7 @@ def delete_linkedin_post(post_url_or_urn: str) -> str:
     req = urllib.request.Request(url, method="DELETE")
     req.add_header("Authorization", f"Bearer {access_token}")
     req.add_header("X-Restli-Protocol-Version", "2.0.0")
-    req.add_header("Linkedin-Version", time.strftime("%Y%m"))
+    req.add_header("Linkedin-Version", _linkedin_api_version())
 
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
