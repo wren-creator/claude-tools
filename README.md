@@ -739,6 +739,74 @@ as an audit trail.
   everything above the Blocked line is verified-working plumbing, not a
   verified-working image.
 
+## discord-bridge
+
+Exposes three tools for reading and posting to Discord text channels under a
+bot's own identity, via Discord's REST API:
+
+- `list_channels(guild_id)` — lists the text/announcement channels in a
+  server, so you can find a channel's numeric ID from its name before calling
+  the other two tools.
+- `read_channel(channel_id, limit=20)` — returns the most recent messages
+  (newest first), including attachment URLs. `limit` is capped at 100
+  (Discord's own per-request max).
+- `post_message(channel_id, content)` — posts a message under the bot's
+  identity. Posts live and immediately, visible to everyone in the channel —
+  always confirm the exact channel and text with the user before calling
+  this, never call it unprompted, same rule as `linkedin-bridge` and
+  `youtube-bridge`.
+
+Every call is logged to `discord_log.jsonl` (gitignored) as an audit trail.
+
+### Setup
+
+1. Create an app at [discord.com/developers/applications](https://discord.com/developers/applications)
+   → **New Application**. On the **Bot** tab, click **Reset Token** to reveal
+   a bot token, and turn on the **Message Content Intent** toggle under
+   Privileged Gateway Intents — without it, `content` comes back empty on
+   messages the bot didn't author, even with the right channel permissions.
+2. On the **OAuth2 → URL Generator** page, check the `bot` scope, then under
+   Bot Permissions check **View Channels**, **Send Messages**, and **Read
+   Message History**. Open the generated URL and invite the bot to your
+   server.
+3. Put the token in `~/.discord/.env` (create it yourself):
+   ```
+   DISCORD_BOT_TOKEN=...
+   ```
+   then `chmod 600 ~/.discord/.env`.
+4. Register the server with Claude Code:
+   ```
+   claude mcp add discord-bridge --scope user -- \
+     ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/discord_bridge.py
+   ```
+5. Restart Claude Code / reload the window.
+
+### Notes
+
+- Built after searching for an existing Discord MCP server came up empty —
+  the ones found were either read-only (webhook posting, no channel
+  reading), abandoned, or required more setup than just standing up a
+  minimal bridge in this repo's existing style. Same pattern as
+  `slack-digest-bridge`: own bot token in a dotfile, stdlib `urllib` only, no
+  new dependency in `requirements.txt`.
+- Uses Discord API version `v10` (`https://discord.com/api/v10`), the
+  current stable version as of this writing.
+- `_format_discord_error` parses Discord's JSON error body (`message` +
+  numeric `code`) and adds a plain-English hint for the common failure
+  modes: `401` (bad token), `403` (bot present but missing a permission,
+  or Message Content Intent off), `404` (bot not actually in that
+  server/channel, or a wrong ID).
+- Deliberately excluded from `mcpo_config.json`, same rationale as
+  `linkedin-bridge`/`youtube-bridge` — `post_message` publishes visibly
+  under a real identity, so it stays MCP-only where the "confirm before
+  posting" rule is enforced by Claude Code's own tool-call flow, not
+  bypassable by an HTTP client holding the proxy's API key.
+- Not yet verified against a live Discord server/bot — no Discord bot
+  token was available in this environment to test against. Code path
+  mirrors `slack_digest_bridge.py`'s verified request/error-handling
+  pattern closely, but treat `list_channels`/`read_channel`/`post_message`
+  as unverified until run once against a real server.
+
 ## mcpo proxy
 
 Fronts `gemini-bridge`, `tn3270-bridge`, and `repo-bridge` with
@@ -870,3 +938,8 @@ these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
       against a real message in #claude-tools and a synthetic multi-message
       thread (see Notes above) — one real miss found: an open question
       wasn't flagged as a BLOCKER, documented as a known first-pass gap.
+- [x] New discord-bridge: `list_channels`/`read_channel`/`post_message` for a
+      Discord server, since no existing Discord MCP server actually covered
+      both reading and posting. Surfaced 2026-08-07. Not yet verified against
+      a live server (see Notes above) — no Discord bot token was available to
+      test against in this environment.
