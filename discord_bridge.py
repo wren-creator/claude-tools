@@ -93,6 +93,38 @@ def list_channels(guild_id: str) -> str:
 
 
 @mcp.tool()
+def create_channel(guild_id: str, name: str, topic: str = "") -> str:
+    """Create a new text channel in a Discord server. Requires
+    DISCORD_BOT_TOKEN in ~/.discord/.env, and the bot must have the Manage
+    Channels permission in this server.
+
+    name is auto-formatted by Discord (lowercased, spaces become hyphens).
+    topic is optional and shows under the channel name in Discord's UI.
+
+    This creates a real, visible channel immediately — always confirm the
+    exact server and channel name with the user before calling this, never
+    call it unprompted, same rule as post_message.
+    """
+    token = _load_token()
+    if not token:
+        return f"Error: DISCORD_BOT_TOKEN not found in {ENV_FILE}"
+
+    body = {"name": name, "type": 0}
+    if topic:
+        body["topic"] = topic
+
+    try:
+        result = _discord_request("POST", f"/guilds/{guild_id}/channels", token, body=body)
+    except urllib.error.HTTPError as e:
+        return _format_discord_error(e)
+    except urllib.error.URLError as e:
+        return f"Error calling Discord API: {e.reason}"
+
+    _log({"tool": "create_channel", "guild_id": guild_id, "name": name, "channel_id": result.get("id")})
+    return f"Created #{result.get('name')} (id: {result.get('id')})."
+
+
+@mcp.tool()
 def read_channel(channel_id: str, limit: int = 20) -> str:
     """Read the most recent messages from a Discord text channel, newest
     first. Requires DISCORD_BOT_TOKEN in ~/.discord/.env, the bot must be a

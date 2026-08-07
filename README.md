@@ -741,12 +741,12 @@ as an audit trail.
 
 ## discord-bridge
 
-Exposes three tools for reading and posting to Discord text channels under a
-bot's own identity, via Discord's REST API:
+Exposes four tools for reading, posting to, and managing Discord text
+channels under a bot's own identity, via Discord's REST API:
 
 - `list_channels(guild_id)` — lists the text/announcement channels in a
   server, so you can find a channel's numeric ID from its name before calling
-  the other two tools.
+  the other tools.
 - `read_channel(channel_id, limit=20)` — returns the most recent messages
   (newest first), including attachment URLs. `limit` is capped at 100
   (Discord's own per-request max).
@@ -755,6 +755,11 @@ bot's own identity, via Discord's REST API:
   always confirm the exact channel and text with the user before calling
   this, never call it unprompted, same rule as `linkedin-bridge` and
   `youtube-bridge`.
+- `create_channel(guild_id, name, topic="")` — creates a new text channel in
+  a server. Requires the bot to have Manage Channels permission. Creates a
+  real, visible channel immediately — always confirm the exact server and
+  channel name with the user first, never call it unprompted, same rule as
+  `post_message`.
 
 Every call is logged to `discord_log.jsonl` (gitignored) as an audit trail.
 
@@ -766,9 +771,11 @@ Every call is logged to `discord_log.jsonl` (gitignored) as an audit trail.
    Privileged Gateway Intents — without it, `content` comes back empty on
    messages the bot didn't author, even with the right channel permissions.
 2. On the **OAuth2 → URL Generator** page, check the `bot` scope, then under
-   Bot Permissions check **View Channels**, **Send Messages**, and **Read
-   Message History**. Open the generated URL and invite the bot to your
-   server.
+   Bot Permissions check **View Channels**, **Send Messages**, **Read
+   Message History**, and **Manage Channels** (needed for `create_channel`).
+   Open the generated URL and invite the bot to your server. If the bot is
+   already invited without Manage Channels, grant it the role permission
+   directly in Server Settings → Roles instead of re-inviting.
 3. Put the token in `~/.discord/.env` (create it yourself):
    ```
    DISCORD_BOT_TOKEN=...
@@ -801,11 +808,11 @@ Every call is logged to `discord_log.jsonl` (gitignored) as an audit trail.
   under a real identity, so it stays MCP-only where the "confirm before
   posting" rule is enforced by Claude Code's own tool-call flow, not
   bypassable by an HTTP client holding the proxy's API key.
-- Not yet verified against a live Discord server/bot — no Discord bot
-  token was available in this environment to test against. Code path
-  mirrors `slack_digest_bridge.py`'s verified request/error-handling
-  pattern closely, but treat `list_channels`/`read_channel`/`post_message`
-  as unverified until run once against a real server.
+- `list_channels` has been verified against a live server. `create_channel`
+  is new and not yet verified against a live server/bot with Manage
+  Channels permission — code path mirrors the other tools' verified
+  request/error-handling pattern, but treat it as unverified until run
+  once for real.
 
 ## mcpo proxy
 
