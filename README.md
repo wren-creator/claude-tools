@@ -596,6 +596,95 @@ Every call is logged to `youtube_log.jsonl` (gitignored).
   so the "confirm before calling" rule can't be bypassed by an HTTP client
   holding the proxy's API key.
 
+## slack-digest-bridge
+
+Exposes one tool that fetches a Slack thread server-side and digests it with
+a local Ollama model, so the raw thread never has to land in the agent's own
+context the way it does through the hosted Slack connector:
+
+- `digest_thread(thread_url, model="qwen2.5-coder:7b")` — pass a Slack
+  permalink to any message in the thread (a message's "Copy link" action) —
+  works for both the parent message's link and a reply's link. Fetches the
+  thread via `conversations.replies` and returns `DECISIONS`/`ACTION_ITEMS`/
+  `BLOCKERS` sections instead of the raw messages.
+
+Every call is logged to `slack_digest_log.jsonl` (gitignored) as an audit
+trail.
+
+### Setup
+
+1. Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps) →
+   **Create New App** → **From a manifest**, pick the target workspace, and
+   paste:
+   ```yaml
+   display_information:
+     name: claude-tools-digest
+     description: Read-only bot for Slack thread digests via claude-tools
+   features:
+     bot_user:
+       display_name: claude-tools-digest
+       always_online: false
+   oauth_config:
+     scopes:
+       bot:
+         - channels:history
+         - channels:read
+         - groups:history
+         - groups:read
+   settings:
+     org_deploy_enabled: false
+   ```
+2. On the app's **OAuth & Permissions** page, click **Install to Workspace**
+   and approve. Copy the **Bot User OAuth Token** (`xoxb-...`) shown after —
+   ignore the separate **App Credentials** page (Client ID/Secret/Signing
+   Secret); those are for building an external OAuth authorize flow, not
+   needed for an app that only installs into your own workspace.
+3. Invite the bot to every channel you want digested — it can't read a
+   channel's history until it's a member, even with the scopes granted:
+   `/invite @claude-tools-digest` in each one.
+4. Put the token in `~/.slack/.env` (create it yourself):
+   ```
+   SLACK_BOT_TOKEN=xoxb-...
+   ```
+   then `chmod 600 ~/.slack/.env`.
+5. Register the server with Claude Code:
+   ```
+   claude mcp add slack-digest-bridge --scope user -- \
+     ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/slack_digest_bridge.py
+   ```
+6. Restart Claude Code / reload the window.
+
+### Notes
+
+- This exists because the hosted `claude_ai` Slack connector already returns
+  raw thread content into the agent's context by the time the agent sees
+  it — it can't be the fetch path for a tool meant to keep raw messages out
+  of context, so this bridge holds its own bot token and fetches
+  server-side instead.
+- Scopes are read-only on purpose (`*:history`/`*:read`, no `chat:write`) —
+  this bot never posts, it only ever reads threads it's been invited to.
+- Message text can contain raw Slack IDs (`<@U12345>` for a user,
+  `<#C12345|name>` for a channel) since the bot doesn't have `users:read` —
+  the digest instructions tell the model to carry those through as-is
+  rather than guess a display name.
+- `conversations.replies` is called with `limit=200` and no pagination — if
+  a thread has more than 200 replies, only the first batch is digested and
+  the response says so. Not built out further since no thread in this
+  workspace is anywhere near that size yet.
+- Verified end-to-end against a real message in `#claude-tools`
+  (`conversations.replies` fetch, auth, and Ollama round trip all
+  confirmed working), and separately against a synthetic 6-message thread
+  (decision, action item with a raw `<@U123>` mention, a `channel_join`
+  system message, and a bare `:+1:` reaction) to check the filtering and
+  extraction logic: the join event and the reaction were correctly dropped,
+  the decision and action item were both extracted correctly with the
+  mention preserved verbatim. One real miss in that same test — an open
+  question in the synthetic thread ("not sure if we need a separate channel
+  for the mobile team") wasn't picked up as a `BLOCKER`. Same caveat as
+  `ollama-bridge`'s other triage tools: a 7B model's first pass, not a
+  guarantee, re-read the thread yourself (`slack_read_thread`) for anything
+  where a missed open question would actually matter.
+
 ## image-bridge
 
 Exposes one tool backed by Gemini's native image model
@@ -774,10 +863,10 @@ these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
       Studio / Cloud project before a real image can be generated. Surfaced
       2026-08-06 while building interior illustrations for a children's
       book manuscript.
-- [ ] New slack-digest-bridge (or extend an existing bridge): local-model
-      digest of a Slack thread (decisions/action-items/blockers) before it
-      hits agent context. Needs its own Slack app/bot token to fetch thread
-      content server-side, since the hosted Slack connector already returns
-      raw messages into context by the time the agent sees them, so it can't
-      be the fetch path for this tool. Surfaced 2026-08-06, ranked #3, blocked
-      on creating that Slack app/bot and deciding scopes.
+- [x] New slack-digest-bridge: `digest_thread`, a local-model digest of a
+      Slack thread (decisions/action-items/blockers) fetched server-side via
+      its own read-only bot token, so raw thread content never has to land
+      in agent context. Surfaced 2026-08-06, ranked #3. Verified end-to-end
+      against a real message in #claude-tools and a synthetic multi-message
+      thread (see Notes above) — one real miss found: an open question
+      wasn't flagged as a BLOCKER, documented as a known first-pass gap.
