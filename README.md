@@ -950,3 +950,14 @@ these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
       both reading and posting. Surfaced 2026-08-07. Not yet verified against
       a live server (see Notes above) — no Discord bot token was available to
       test against in this environment.
+- [x] Created `#britleys-corner` on the Discord server (guild
+      961749187802824724) as a project idea inbox, random thoughts and ideas
+      land there before they earn the right to become a real project.
+      Introduced 2026-08-07.
+- [x] Measured the actual token savings from the `prefilter_diff` escalation
+      order, pulled straight from `ollama_log.jsonl`: 149 diffs reviewed by
+      the local model, 147 of them (98.7%) came back clean and never
+      escalated to `review_diff`, only 2 needed the bigger model. That's
+      roughly 90,000+ tokens of review output avoided on diff review alone.
+      Surfaced 2026-08-08 while drafting a LinkedIn post on tiering AI work
+      by cost, numbers cited there are these.
