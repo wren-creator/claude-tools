@@ -11,10 +11,6 @@
     "repo-bridge": {
       "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
       "args": ["/Users/britleywrenhoff/git/claude-tools/repo_bridge.py"]
-    },
-    "github-audit-bridge": {
-      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
-      "args": ["/Users/britleywrenhoff/git/claude-tools/github_audit_bridge.py"]
     }
   }
 }

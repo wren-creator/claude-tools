@@ -814,13 +814,76 @@ Every call is logged to `discord_log.jsonl` (gitignored) as an audit trail.
   request/error-handling pattern, but treat it as unverified until run
   once for real.
 
+## github-audit-bridge
+
+Exposes three tools for auditing and fixing Dependabot coverage across every
+repo on a GitHub account, backed by the `gh` CLI:
+
+- `audit_dependabot_coverage(owner="wren-creator")` — checks every
+  non-archived repo under `owner` for vulnerability alerts, automated
+  security-fix PRs, and a `.github/dependabot.yml` (scheduled version-update
+  config), in parallel. Returns one compact table plus a "needs attention"
+  line listing repos with alerts off.
+- `list_open_work(owner="wren-creator")` — lists open issues and open pull
+  requests (fetched separately, not double-counted) for every repo that has
+  any, skipping repos with nothing open.
+- `enable_dependabot(owner, repo)` — turns on vulnerability alerts and
+  automated security-fix PRs for one repo. Idempotent, safe to call on a repo
+  that already has it on. Does not create a `dependabot.yml` — that's a
+  separate, per-repo config this tool doesn't write.
+
+All three run entirely against the GitHub REST API through `gh api` — no LLM
+calls, no repo cloning. Built to replace looping raw `gh api` calls by hand
+for this kind of account-wide check, which burns a lot of turns doing the
+same handful of lookups per repo.
+
+### Setup
+
+1. `gh auth login` with a token scoped for repo security-events access (the
+   account's existing `gh` auth, if already logged in, is reused as-is — no
+   separate credential file).
+2. Register the server with Claude Code:
+   ```
+   claude mcp add github-audit-bridge --scope user -- \
+     ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/github_audit_bridge.py
+   ```
+3. Restart Claude Code / reload the window.
+
+### Notes
+
+- Built 2026-08-10 after a manual 41-repo Dependabot audit for
+  `wren-creator` burned a lot of turns looping `gh api` calls one repo at a
+  time. Verified against that same account: `audit_dependabot_coverage`
+  reproduced the manual audit's numbers exactly (36 repos on, 5 off), and
+  `enable_dependabot` was used for real to turn on the 5 that were off.
+- `vulnerability-alerts` returns `204`/exit 0 when on and `404`/exit 1 when
+  off — `_check_repo_security` reads that off `gh`'s own returncode rather
+  than parsing a body, since the endpoint has no JSON body either way.
+  `automated-security-fixes` does return a body (`{"enabled": true/false}`),
+  parsed instead of trusting the HTTP status — an earlier version of the
+  by-hand audit that led to this tool mistakenly treated any 2xx as
+  "enabled" and got it wrong for repos with fixes actually off.
+- `.github/dependabot.yml` presence is checked via the exit code of `gh api
+  repos/.../contents/...`, not by inspecting stdout — `gh api`'s 404 error
+  body (`{"message":"Not Found",...}`) prints to stdout, not stderr, so an
+  earlier draft that checked "is stdout non-empty" got a false "present" on
+  every single repo, including ones with no config file at all. Caught by
+  hand before this tool existed; the fix carried forward into
+  `_check_repo_security` directly.
+- Excluded from `mcpo_config.json` on purpose, same rationale as
+  `linkedin-bridge`/`youtube-bridge`/`discord-bridge` — `enable_dependabot`
+  changes real settings on a live GitHub repo. Keeping it MCP-only means that
+  change only ever happens through Claude Code's own guarded tool-call flow,
+  not an HTTP client holding the proxy's API key.
+
 ## mcpo proxy
 
 Fronts `gemini-bridge`, `tn3270-bridge`, and `repo-bridge` with
 [`mcpo`](https://github.com/open-webui/mcpo), so tool-calling harnesses that
 don't speak MCP natively (e.g. Ollama or llama.cpp-based agents) can call
-these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
-`youtube-bridge` are deliberately excluded - see Notes.
+these tools over plain HTTP/OpenAPI instead. `linkedin-bridge`,
+`youtube-bridge`, `discord-bridge`, and `github-audit-bridge` are
+deliberately excluded - see each one's Notes.
 
 ### Setup
 
@@ -961,3 +1024,10 @@ these tools over plain HTTP/OpenAPI instead. `linkedin-bridge` and
       roughly 90,000+ tokens of review output avoided on diff review alone.
       Surfaced 2026-08-08 while drafting a LinkedIn post on tiering AI work
       by cost, numbers cited there are these.
+- [x] New github-audit-bridge: `audit_dependabot_coverage`/`list_open_work`/
+      `enable_dependabot` for checking and fixing Dependabot coverage across
+      every repo on a GitHub account via `gh api`, no LLM calls. Surfaced
+      2026-08-10 after a manual 41-repo audit burned a lot of turns looping
+      `gh api` by hand. Verified end-to-end against the real `wren-creator`
+      account — reproduced the manual audit's numbers exactly, and
+      `enable_dependabot` was used for real to fix the 5 repos found off.
