@@ -1278,3 +1278,15 @@ Every tool call (name, arguments, result) is logged to
       confirmed zero `fonts.googleapis.com` requests, `evaluate` and
       `screenshot` both round-tripped real data. Chromium only for now —
       Firefox/WebKit installs deferred pending a non-metered connection.
+- [x] New `ollama_agent.py`: a standalone chat loop giving a local Ollama
+      model real tool access to the tools `mcpo` fronts (`gemini-bridge`,
+      `tn3270-bridge`, `repo-bridge`), the DIY answer to "how can Ollama
+      call these bridges" without routing through Open WebUI. Surfaced
+      2026-08-11. Verified end-to-end against a live `mcpo` instance and
+      `qwen2.5-coder:7b`, including two real model quirks caught and
+      handled along the way: neither `:7b` nor `:14b` populate Ollama's
+      structured `tool_calls` field, they answer with JSON text in
+      `message.content` instead, and the model sometimes drops a tool's
+      `<server>__` prefix or invents a placeholder path on an
+      underspecified prompt. See the `ollama-agent` section above for the
+      fixes for each.
