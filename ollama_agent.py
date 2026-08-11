@@ -37,6 +37,12 @@ OLLAMA_TIMEOUT = 120  # local 14b tool-calling turns are slower than a
 # plain triage prompt
 MCPO_TIMEOUT = 60
 MAX_TOOL_ITERATIONS = 8
+NETWORK_DEPENDENT_SERVERS = {"gemini-bridge"}  # needs real internet access;
+# excluded outright by --offline rather than just told not to use them -
+# confirmed live 2026-08-11 that a soft instruction isn't enough, the model
+# called gemini-bridge__ask_gemini 8 times in a row rephrasing the same
+# question rather than reaching for a local tool, which is exactly the
+# failure mode --offline exists to make impossible instead of just unlikely
 
 SYSTEM_PROMPT = (
     "You are a local coding assistant with tool access to a codebase "
@@ -49,6 +55,10 @@ SYSTEM_PROMPT = (
     "given in the conversation - never a placeholder like '/path/to/repo'. "
     "Give a direct final answer in plain text once you have what you "
     "need, don't call more tools than necessary."
+)
+OFFLINE_SYSTEM_NOTE = (
+    " There is no internet connection right now - only local tools are "
+    "available for this conversation."
 )
 
 
@@ -102,7 +112,7 @@ def _resolve_refs(node, spec: dict):
     return node
 
 
-def fetch_mcpo_tools(mcpo_url: str, config_path: Path) -> tuple[list[dict], dict[str, str]]:
+def fetch_mcpo_tools(mcpo_url: str, config_path: Path, exclude_servers: frozenset[str] = frozenset()) -> tuple[list[dict], dict[str, str]]:
     """Returns (tools in Ollama's function-calling format, name -> mcpo
     path map). mcpo mounts each MCP server as its own sub-app with its own
     openapi.json (the combined /openapi.json is just an index page with no
@@ -117,6 +127,8 @@ def fetch_mcpo_tools(mcpo_url: str, config_path: Path) -> tuple[list[dict], dict
     tools = []
     endpoint_map = {}
     for server in servers:
+        if server in exclude_servers:
+            continue
         spec = _get_json(f"{mcpo_url}/{server}/openapi.json", headers={}, timeout=MCPO_TIMEOUT)
         for path, methods in spec.get("paths", {}).items():
             post = methods.get("post")
@@ -270,6 +282,9 @@ def main():
                          help="path to the mcpo_config.json mcpo itself was started with (for server names)")
     parser.add_argument("--num-ctx", type=int, default=DEFAULT_NUM_CTX)
     parser.add_argument("--list-tools", action="store_true", help="print the loaded tools and exit, without calling Ollama")
+    parser.add_argument("--offline", action="store_true",
+                         help=f"exclude network-dependent tool servers ({', '.join(NETWORK_DEPENDENT_SERVERS)}) "
+                              "entirely rather than relying on the model to avoid them")
     args = parser.parse_args()
 
     env = _load_mcpo_env()
@@ -281,8 +296,9 @@ def main():
             f"MCPO_API_KEY=... to {MCPO_ENV_PATH} (matching the --api-key mcpo was started with)."
         )
 
+    exclude_servers = NETWORK_DEPENDENT_SERVERS if args.offline else frozenset()
     try:
-        tools, endpoint_map = fetch_mcpo_tools(mcpo_url, Path(args.mcpo_config))
+        tools, endpoint_map = fetch_mcpo_tools(mcpo_url, Path(args.mcpo_config), exclude_servers)
     except (urllib.error.URLError, urllib.error.HTTPError):
         sys.exit(f"Could not reach mcpo at {mcpo_url} - is `mcpo --config mcpo_config.json` running?")
     print(f"Loaded {len(tools)} tools from mcpo at {mcpo_url}: {', '.join(endpoint_map)}", file=sys.stderr)
@@ -291,7 +307,8 @@ def main():
         print(format_tools(tools))
         return
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    system_prompt = SYSTEM_PROMPT + (OFFLINE_SYSTEM_NOTE if args.offline else "")
+    messages = [{"role": "system", "content": system_prompt}]
 
     if args.prompt:
         if args.prompt == ["/tools"]:

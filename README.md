@@ -1098,7 +1098,10 @@ format and dispatches whatever the model calls.
    `--num-ctx` (default 8192) override the defaults/dotfile. `--list-tools`
    prints the loaded tools and exits without calling Ollama; the same list
    is available mid-conversation via `/tools`, in either interactive mode
-   or as the one-shot prompt.
+   or as the one-shot prompt. `--offline` excludes `gemini-bridge` (or any
+   other server listed in `NETWORK_DEPENDENT_SERVERS`) from the loaded
+   tools entirely, rather than just telling the model not to use it - see
+   Notes, a soft instruction alone wasn't enough.
 
 Every tool call (name, arguments, result) is logged to
 `ollama_agent_log.jsonl` (gitignored).
@@ -1147,13 +1150,29 @@ Every tool call (name, arguments, result) is logged to
   dispatched, real results fed back, and a correct final answer synthesized
   from the actual file contents (`DEFAULT_MODEL = "qwen2.5-coder:7b"` read
   back out of `ollama_bridge.py` itself).
+- `--offline` exists because a soft instruction wasn't enough. Without it,
+  a prompt that didn't push the model toward a specific local tool got it
+  calling `gemini-bridge__ask_gemini` eight times in a row (the full
+  `MAX_TOOL_ITERATIONS` budget), rephrasing the same question each time
+  instead of reaching for `repo-bridge__get_file` - caught live 2026-08-11
+  while testing the VS Code integration below, where this failure mode
+  matters most since `gemini-bridge` is exactly the tool that can't work
+  when there's actually no internet. `--offline` removes
+  `NETWORK_DEPENDENT_SERVERS` from the tool list before it's ever sent to
+  Ollama, so the model can't reach for it regardless of what it decides -
+  a hard exclusion instead of a hopeful one, consistent with not trusting
+  this model to reliably follow soft instructions elsewhere in this file.
+  Re-ran the identical prompt that triggered the original loop with
+  `--offline` added: one `repo-bridge__get_file` call, correct answer.
 - Same exclusions as the `mcpo proxy` section above -
   `linkedin-bridge`/`youtube-bridge`/`discord-bridge`/`github-audit-bridge`
   aren't in `mcpo_config.json`, so this script can't call them either.
 
 ### VS Code integration (offline fallback)
 
-`.vscode/tasks.json` wires `ollama_agent.py` into VS Code for a "Claude
+VS Code **User Tasks** (`~/Library/Application Support/Code/User/tasks.json`
+on macOS, not committed here - personal-machine config, same tier as
+`keybindings.json`) wire `ollama_agent.py` into the editor for a "Claude
 Code, but works with no internet" fallback - built after weighing a real
 VS Code extension against this (see Roadmap below) and finding the
 extension wasn't worth the new code/maintenance for something only used
@@ -1164,31 +1183,43 @@ Task**:
   for the key, same command as the mcpo proxy section above. Run this
   first - the other two tasks will surface `ollama_agent.py`'s own clear
   error ("is `mcpo` running?") without it.
-- **Ollama Offline: Ask about selection** - runs `ollama_agent.py` with a
-  one-shot prompt built from the real workspace path, active file, and
-  current selection (VS Code's `${workspaceFolder}`/`${relativeFile}`/
-  `${selectedText}` variables), so the model gets real context up front
-  instead of the placeholder-path hallucination risk noted above. Uses
-  `"type": "process"` rather than `"shell"` so the selected code is passed
-  as one real argv element, not concatenated into a shell command line -
-  arbitrary quotes/backticks/`$` in a selection can't break or inject into
-  the command. Bound to `cmd+alt+o` in this machine's personal VS Code
-  `keybindings.json` (not committed - keybindings aren't a
-  workspace-shareable concept in VS Code); remap it there if it collides
-  with something.
-- **Ollama Offline: Open REPL** - launches `ollama_agent.py` with no args
-  for general interactive offline chat, same as running it by hand.
+- **Ollama Offline: Ask about selection** - runs `ollama_agent.py --offline`
+  with a one-shot prompt built from the active file's absolute path and
+  containing directory, plus the current selection (VS Code's
+  `${file}`/`${fileDirname}`/`${selectedText}` variables), so the model
+  gets real context up front instead of the placeholder-path hallucination
+  risk noted above. Uses `"type": "process"` rather than `"shell"` so the
+  selected code is passed as one real argv element, not concatenated into
+  a shell command line - arbitrary quotes/backticks/`$` in a selection
+  can't break or inject into the command. Bound to `cmd+alt+o` (Option key
+  on a Mac keyboard) in this machine's personal VS Code `keybindings.json`;
+  remap it there if it collides with something.
+- **Ollama Offline: Open REPL** - launches `ollama_agent.py --offline` with
+  no other args, for general interactive offline chat.
 
-No changes to `ollama_agent.py` itself - all three tasks use it exactly as
-documented above. `gemini-bridge` tools are still unreachable with no
-internet regardless of how the script is invoked; only
-`repo-bridge`/`tn3270-bridge` are genuinely useful offline.
+No changes to `ollama_agent.py` itself beyond adding `--offline` (see
+Notes above) - all three tasks otherwise use it exactly as documented.
+
+**Why User Tasks and not a workspace `.vscode/tasks.json`** (what this
+repo shipped first, 2026-08-11): VS Code only loads `.vscode/tasks.json`
+from the folder that's actually open as the workspace root, it doesn't
+search subfolders. This machine's actual daily habit is one VS Code
+window with the parent `~/git` folder open, not `claude-tools` opened on
+its own - so a workspace-scoped `tasks.json` living inside `claude-tools`
+was invisible to VS Code the moment the keybinding was tested for real,
+silently doing nothing (no error, `workbench.action.tasks.runTask`
+just couldn't find a task by that label). User Tasks are global regardless
+of which folder or repo is focused, which is what this actually needed -
+caught by testing the real keybinding, not just simulating the
+task's underlying command.
 
 Verified 2026-08-11: simulated the "Ask about selection" task's exact
 `"process"`-type invocation (real argv array, no shell) with a selection
 containing `$`, backticks, and quotes - passed through safely with no
 injection, and produced a real `get_file` tool call against the real
-repo path.
+repo path. Separately verified `--offline` fixes the `gemini-bridge`
+looping failure documented above, using the same invocation shape this
+task actually sends.
 
 ## Roadmap
 
@@ -1329,18 +1360,27 @@ repo path.
       `<server>__` prefix or invents a placeholder path on an
       underspecified prompt. See the `ollama-agent` section above for the
       fixes for each.
-- [x] Wired `ollama_agent.py` into VS Code via `.vscode/tasks.json` for an
-      offline "no internet" fallback inside the editor. Surfaced 2026-08-11
-      right after `ollama_agent.py` itself, when the user asked about
-      building a dedicated VS Code extension for this. Got a second
-      opinion from Gemini first: a full extension (or even a thin
-      subprocess-wrapper one) was real new code and new failure modes for
-      something only used during outages, its call was to skip the
-      extension and wire the existing script into VS Code's built-in task
-      system instead - the user agreed. Three tasks (start `mcpo`, ask
-      about the active selection with real editor context injected, open
-      an interactive REPL), one bound to a personal keybinding. See the
-      `ollama-agent` section's VS Code integration subsection above for
-      the full writeup, including the `"process"`-type (not `"shell"`)
-      task design that keeps an arbitrary code selection from being able
-      to inject into the command line.
+- [x] Wired `ollama_agent.py` into VS Code for an offline "no internet"
+      fallback inside the editor. Surfaced 2026-08-11 right after
+      `ollama_agent.py` itself, when the user asked about building a
+      dedicated VS Code extension for this. Got a second opinion from
+      Gemini first: a full extension (or even a thin subprocess-wrapper
+      one) was real new code and new failure modes for something only used
+      during outages, its call was to skip the extension and wire the
+      existing script into VS Code's built-in task system instead - the
+      user agreed. Two real bugs caught only by testing the actual
+      keybinding for real, not just simulating the underlying command:
+      (1) the first version shipped as a workspace `.vscode/tasks.json`,
+      invisible the moment the user tested it since their real habit is
+      one VS Code window with the parent `~/git` folder open, not
+      `claude-tools` on its own - moved to global VS Code User Tasks,
+      which don't depend on which folder is focused; (2) with no explicit
+      nudge, the model reached for `gemini-bridge__ask_gemini` eight times
+      in a row instead of a local tool, exactly the tool that can't work
+      with no internet - added an `--offline` flag to `ollama_agent.py`
+      that excludes `NETWORK_DEPENDENT_SERVERS` from the tool list
+      entirely rather than just telling the model not to use them. See the
+      `ollama-agent` section's VS Code integration subsection and Notes
+      above for the full writeup, including the `"process"`-type (not
+      `"shell"`) task design that keeps an arbitrary code selection from
+      being able to inject into the command line.
