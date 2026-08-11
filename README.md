@@ -1054,6 +1054,103 @@ deliberately excluded - see each one's Notes.
   it, and confirmed the (intentionally public) `openapi.json`/`/docs`
   endpoints are reachable either way.
 
+## ollama-agent
+
+A standalone chat loop (`ollama_agent.py`, not an MCP server itself) that lets
+a local Ollama model actually call the tools `mcpo` fronts -
+`gemini-bridge`, `tn3270-bridge`, `repo-bridge` - over plain HTTP. The DIY
+alternative to routing through Open WebUI: no extra service, just a script
+that turns `mcpo`'s OpenAPI spec into Ollama's own function-calling `tools`
+format and dispatches whatever the model calls.
+
+- Fetches each server's own `openapi.json` from `mcpo` (there's no single
+  combined spec with real paths - see Notes) and converts it into Ollama's
+  `tools` format.
+- Runs a normal `/api/chat` loop: sends the conversation plus `tools`,
+  executes any tool call against `mcpo`, feeds the result back, repeats
+  until the model gives a plain-text final answer (capped at 8 tool-call
+  rounds to avoid a runaway loop).
+- Falls back to parsing a JSON-shaped call out of `message.content` when the
+  model answers with one instead of populating Ollama's structured
+  `tool_calls` field - see Notes, this is qwen2.5-coder's actual default
+  behavior locally, not a rare edge case.
+
+### Setup
+
+1. Have `mcpo` already running against `mcpo_config.json` (see the mcpo
+   proxy section above):
+   ```
+   .venv/bin/mcpo --port 8000 --api-key "your-key" --config mcpo_config.json
+   ```
+2. Put the same key mcpo was started with in `~/.mcpo/.env` (create it
+   yourself):
+   ```
+   MCPO_API_KEY=your-key
+   MCPO_URL=http://localhost:8000
+   ```
+   then `chmod 600 ~/.mcpo/.env`.
+3. Run it:
+   ```
+   .venv/bin/python ollama_agent.py                       # interactive REPL
+   .venv/bin/python ollama_agent.py "your one-shot prompt"
+   ```
+   `--model` (default `qwen2.5-coder:7b`), `--mcpo-url`, `--api-key`, and
+   `--num-ctx` (default 8192) override the defaults/dotfile. `--list-tools`
+   prints the loaded tools and exits without calling Ollama; the same list
+   is available mid-conversation via `/tools`, in either interactive mode
+   or as the one-shot prompt.
+
+Every tool call (name, arguments, result) is logged to
+`ollama_agent_log.jsonl` (gitignored).
+
+### Notes
+
+- `mcpo`'s combined `/openapi.json` is just an index page linking to each
+  server's own docs - its `paths` object is empty. The real per-tool
+  schemas live at `/<server-name>/openapi.json`, one FastAPI sub-app per MCP
+  server. `fetch_mcpo_tools` reads `mcpo_config.json` directly for the
+  server name list (the same config `mcpo` itself was started with) instead
+  of trying to discover servers from the index page, then fetches each
+  server's own spec and resolves its `$ref` schemas.
+- Confirmed live 2026-08-11 against both `qwen2.5-coder:7b` and `:14b`:
+  neither actually populates Ollama's structured `message.tool_calls`
+  field, despite both reporting `tools` in their `ollama show`
+  capabilities - they answer with a bare `{"name": ..., "arguments":
+  {...}}` JSON object in `message.content` instead, sometimes with more
+  than one such object printed back to back as plain text rather than one
+  valid JSON value. `_fallback_tool_calls` scans `content` for every `{`
+  and tries `json.JSONDecoder().raw_decode()` from there, which stops at
+  the first balanced close-brace and ignores anything before/after -
+  handles markdown fences, multiple sequential calls, and trailing
+  commentary without special-casing any of them.
+- Also seen live: the model dropping a tool's `<server>__` prefix (e.g.
+  calling `get_file` instead of the registered `repo-bridge__get_file`).
+  `_fallback_tool_calls` resolves a bare name back to its full one when
+  exactly one server exposes it, and stays silent (falls through as
+  unrecognized) rather than guessing when a bare name is ambiguous across
+  servers.
+- The system prompt explicitly warns against placeholder paths like
+  `/path/to/repo` - without it, a prompt that didn't spell out the repo
+  path verbatim got a hallucinated placeholder path passed straight to a
+  real tool call. Always state the real absolute path in the prompt; the
+  warning reduces but doesn't eliminate this.
+- `num_ctx` is set explicitly to 8192, same reasoning as
+  `ollama_bridge.py`'s `_call_ollama` - Ollama defaults to 2048 regardless
+  of a model's real context length, which would silently truncate the tool
+  schemas and system prompt before the conversation even starts.
+- `:14b` ran noticeably slower than `:7b` on this (CPU-only, no local GPU)
+  hardware - `:7b` is the default for interactive use; pass `--model
+  qwen2.5-coder:14b` when latency isn't a concern.
+- Verified end-to-end 2026-08-11: `repo-bridge__list_structure` and
+  `repo-bridge__get_file`, both via `qwen2.5-coder:7b` against a live
+  `mcpo` instance fronting this repo's own three servers - real tool calls
+  dispatched, real results fed back, and a correct final answer synthesized
+  from the actual file contents (`DEFAULT_MODEL = "qwen2.5-coder:7b"` read
+  back out of `ollama_bridge.py` itself).
+- Same exclusions as the `mcpo proxy` section above -
+  `linkedin-bridge`/`youtube-bridge`/`discord-bridge`/`github-audit-bridge`
+  aren't in `mcpo_config.json`, so this script can't call them either.
+
 ## Roadmap
 
 - [x] Add a third gemini-bridge tool for querying Gemini's larger context
