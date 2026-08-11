@@ -1,0 +1,47 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Ollama Offline: Start mcpo",
+      "type": "shell",
+      "command": "set -a && source ~/.mcpo/.env && set +a && \"${workspaceFolder}/.venv/bin/mcpo\" --port 8000 --api-key \"$MCPO_API_KEY\" --config \"${workspaceFolder}/mcpo_config.json\"",
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "focus": false,
+        "panel": "dedicated",
+        "clear": false
+      }
+    },
+    {
+      "label": "Ollama Offline: Ask about selection",
+      "type": "process",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": [
+        "${workspaceFolder}/ollama_agent.py",
+        "Repo: ${workspaceFolder}\nFile: ${relativeFile}\n\nAnswer this about the following selected code - use a tool to check the actual file/repo instead of guessing if you need more context:\n\n${selectedText}"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "clear": true
+      }
+    },
+    {
+      "label": "Ollama Offline: Open REPL",
+      "type": "process",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["${workspaceFolder}/ollama_agent.py"],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "clear": false
+      }
+    }
+  ]
+}
