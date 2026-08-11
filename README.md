@@ -876,6 +876,141 @@ same handful of lookups per repo.
   change only ever happens through Claude Code's own guarded tool-call flow,
   not an HTTP client holding the proxy's API key.
 
+## playwright-bridge
+
+Exposes eight tools backed by [Playwright](https://playwright.dev/python/) for
+driving a real browser mid-session, e.g. to visually verify a UI/CSS fix or
+confirm a network dependency is (or isn't) actually being hit:
+
+- `launch(browser="chromium", headless=True, viewport_width=0, viewport_height=0)`
+  — starts a browser, returns a `session_id`. `browser` is `"chromium"`,
+  `"firefox"`, or `"webkit"`. Every request the page makes from this point
+  until `close()` is recorded — see `get_requests`.
+- `goto(session_id, url, wait_until="load")` — navigates. `wait_until` is
+  `"load"`, `"domcontentloaded"`, `"networkidle"`, or `"commit"`. Returns
+  JSON `{"url", "title", "status"}`.
+- `evaluate(session_id, script)` — runs JavaScript in the page and returns
+  the JSON-encoded result. `script` is an expression or function body, same
+  as Playwright's own `page.evaluate()` — a script returning a Promise is
+  automatically awaited. The general-purpose tool for reading DOM/computed
+  style state or calling into a page's own JS (e.g. a dynamic
+  `import('/js/whatever.js')`) that the other tools don't have a shape for.
+- `screenshot(session_id, output_path, full_page=False, selector="")` —
+  saves a PNG to `output_path` (absolute path); read it back with Claude
+  Code's own `Read` tool to view it. With `selector` set, screenshots just
+  that element.
+- `get_requests(session_id, url_contains="")` — every network request made
+  since `launch()`, as JSON `[{"url", "method", "resource_type", "status"},
+  ...]`. With `url_contains` set, filters to matching URLs — e.g. confirm a
+  CDN dependency was actually removed by checking zero requests contain
+  `"fonts.googleapis.com"`, without needing devtools open.
+- `click(session_id, selector, timeout_ms=5000)` / `fill(session_id,
+  selector, text, timeout_ms=5000)` — basic interaction, CSS or Playwright
+  `text=`/`role=` selector syntax.
+- `close(session_id)` — closes the browser and frees its resources.
+
+Sessions live in memory for the lifetime of the server process (one per
+Claude Code session) — `close` any session you're done with rather than
+letting it leak. Every call is logged to `playwright_log.jsonl` (gitignored).
+
+### Setup
+
+1. Install this project's dependencies (shared `.venv`, `playwright` is in
+   `requirements.txt`):
+   ```
+   cd ~/git/claude-tools
+   .venv/bin/pip install -r requirements.txt
+   ```
+2. Install the browser binaries **once** — this is the actual fix for
+   "waiting on a temporary install every session" (see Notes below). Start
+   with Chromium alone; it covers most verification needs and, as of this
+   writing, was already cached from earlier unrelated `npx playwright`
+   usage, so it costs no download at all. Add Firefox/WebKit later
+   (`.venv/bin/playwright install firefox webkit`) when on a connection
+   that isn't metered/cellular — each is 100MB+ and this repo's own setup
+   session stalled indefinitely trying to fetch Firefox over a cellular
+   hotspot (see Notes):
+   ```
+   .venv/bin/playwright install chromium
+   ```
+3. Register the server with Claude Code:
+   ```
+   claude mcp add playwright-bridge --scope user -- \
+     ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/playwright_bridge.py
+   ```
+4. Restart Claude Code / reload the window.
+
+### Notes
+
+- Built 2026-08-11 after verifying a font-loading fix for web3270 required
+  ad-hoc `npx playwright install chromium firefox` mid-session — Firefox's
+  binary took over 20 minutes to fetch through that ephemeral path and never
+  finished, while Chromium happened to already be cached from an earlier
+  unrelated session. `npx` re-resolves and re-fetches `playwright` itself
+  into a fresh `~/.npm/_npx/<hash>/` directory essentially every time it's
+  invoked from a new working directory, so nothing about that install
+  persists or speeds up the next one. A real dependency in this repo's
+  shared `.venv`, installed once, does.
+- Browser binaries cache at `~/Library/Caches/ms-playwright/`, keyed by
+  browser version, **not** per-project — this is the same cache directory
+  Node's `playwright`/`@playwright/test` packages use on the same machine,
+  so a Chromium version already fetched by either language's tooling is
+  reused rather than re-fetched. Installing here once covers this bridge
+  permanently; it does not need to be redone per project or per session.
+- Uses Playwright's **sync** API (`playwright.sync_api`), not `async_api` —
+  every tool function here is a plain synchronous function, consistent with
+  the rest of this repo's bridges (subprocess-based, no asyncio event loop
+  already running that would require the async variant instead).
+- `get_requests` exists specifically for the "did a network dependency
+  actually get removed" class of check — the alternative (asking a human to
+  open devtools, or scraping proxy/server logs) is slower and less precise
+  than recording every request Playwright already sees pass through the
+  page.
+- `evaluate` is deliberately the most general tool rather than adding
+  narrower ones (e.g. a dedicated "check computed font-family" tool) — it
+  covers arbitrary DOM/JS inspection including calling directly into a
+  page's own ES module exports via a dynamic `import()`, which is what
+  verifying the web3270 pipe-rendering fix actually needed (feeding a
+  synthetic screen through the real client-side `renderLiveScreen()`
+  function, not a reimplementation of it).
+- Not yet added to `mcpo_config.json` — `click`/`fill` can act on real,
+  arbitrary web pages if pointed at one, closer to `tn3270-bridge`'s
+  `send_keys` (interacts with a live target) than a pure read tool, and
+  there's no immediate need for HTTP-proxied access from a non-MCP harness.
+  Revisit if that need comes up.
+- Verified end-to-end against a live `web3270` Docker stack, calling this
+  bridge's own functions directly (not just the ad-hoc Node/Playwright
+  script that motivated building it): `launch("chromium")` started headless
+  Chromium from the already-cached binary (no download), `goto` loaded the
+  app and returned `{"url", "title", "status": 200}`, `get_requests(...,
+  url_contains="fonts.googleapis.com")` correctly returned `[]`, `evaluate`
+  read back `document.title`, `screenshot` produced a real, correctly
+  rendered PNG of the app UI, and `close` freed the session cleanly.
+- Getting a *working* `.venv` for this bridge was its own saga, worth
+  recording since it's the exact pain this bridge exists to eliminate going
+  forward: over a cellular hotspot connection, `pip install playwright`
+  first failed outright after ~15 minutes with `ConnectionResetError`
+  (silently — the driving command was piped through `tail`, so pip's own
+  non-zero exit code was masked by `tail`'s exit 0; don't trust a piped
+  command's reported exit status for a slow install, check
+  `pip show <package>` for a real `Version:` line instead), then a retry
+  with `--retries 10 --timeout 60` looked stuck for another ~15 minutes
+  (same TCP connection, zero new data) before turning out to just be
+  crawling at ~69 kB/s through a 42.5MB wheel (`playwright`'s Python
+  package bundles its own driver) — it finished on its own, unstuck, right
+  as a second kill/retry was about to be triggered. Lesson: a slow-but-
+  `ESTABLISHED` connection on a metered/cellular link can look identical to
+  a dead one; check for forward progress (changing socket ports on retry,
+  growing output) before killing and restarting something that's actually
+  fine.
+- **Firefox and WebKit are deliberately not installed yet** — each browser
+  binary is 100MB+, and the connection issues above make that an expensive
+  thing to force on a cellular connection. `playwright install firefox
+  webkit` (see Setup) is a same-day, low-risk follow-up once on a real
+  connection; `launch(browser="firefox"|"webkit")` will fail with a clear
+  Playwright "executable doesn't exist" error until then, not a silent
+  wrong result.
+
 ## mcpo proxy
 
 Fronts `gemini-bridge`, `tn3270-bridge`, and `repo-bridge` with
@@ -1031,3 +1166,18 @@ deliberately excluded - see each one's Notes.
       `gh api` by hand. Verified end-to-end against the real `wren-creator`
       account — reproduced the manual audit's numbers exactly, and
       `enable_dependabot` was used for real to fix the 5 repos found off.
+- [x] New playwright-bridge: `launch`/`goto`/`evaluate`/`screenshot`/
+      `get_requests`/`click`/`fill`/`close` for driving a real browser
+      mid-session — visual verification, computed-style/DOM inspection, and
+      confirming a network dependency is or isn't actually being hit.
+      Surfaced 2026-08-11 verifying a web3270 font-loading fix, where an
+      ad-hoc `npx playwright install chromium firefox` stalled on the
+      Firefox binary for 20+ minutes and never finished — nothing about
+      that install persists between sessions, so the next session would hit
+      the same wall. A real `.venv` dependency, installed once, does
+      persist (see Notes for the install itself turning into its own saga
+      over a cellular hotspot). Verified end-to-end against a live web3270
+      Docker stack: `launch`+`goto` loaded the app, `get_requests` correctly
+      confirmed zero `fonts.googleapis.com` requests, `evaluate` and
+      `screenshot` both round-tripped real data. Chromium only for now —
+      Firefox/WebKit installs deferred pending a non-metered connection.

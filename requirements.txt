@@ -14,3 +14,4 @@ mcpo
 faster-whisper
 auto-editor
 google-genai
+playwright
