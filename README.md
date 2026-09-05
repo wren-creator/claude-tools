@@ -1011,6 +1011,61 @@ letting it leak. Every call is logged to `playwright_log.jsonl` (gitignored).
   Playwright "executable doesn't exist" error until then, not a silent
   wrong result.
 
+## docs-pdf-bridge
+
+Renders a Markdown doc to a styled, client-facing PDF. Built for the
+`stock-alarm-service` repo, where `docs/pdf-build/build_system_design_pdf.py`
+was ~450 lines of hand-written `fpdf2` calls that re-encoded all of
+`SYSTEM_DESIGN.md` — so every prose change had to be made twice and the two
+copies kept drifting. This bridge renders the `.md` directly, so it stays
+the single source of truth.
+
+Tools:
+
+- `build_alertis_design_pdf()` — renders
+  `~/git/stock-alarm-service/SYSTEM_DESIGN.md` to
+  `~/Documents/Alertis System Design.pdf`. Run after editing that file.
+- `build_pdf(source, output, subtitle="", author="Britley Hoff")` — generic
+  Markdown-file → PDF in the same house style (blue section headers with
+  rules, Courier code blocks on a light fill, justified body).
+
+Supports ATX headings, paragraphs, bulleted/numbered lists (one nesting
+level), fenced code blocks, `---` rules, `>` blockquotes, and simple pipe
+tables. Inline `**bold**` / `*italic*` / `` `code` `` are flattened to plain
+text — the old script rendered everything as plain body text, so this keeps
+the PDF visually identical. `[label](url)` keeps the label (and the URL for
+real `http(s)` links).
+
+### Setup
+
+1. Dependencies are in the shared `.venv` (`fpdf2`, `mcp`).
+
+2. Register it (already in `~/.claude.json` for this machine):
+
+   ```
+   claude mcp add docs-pdf-bridge --scope user -- \
+     /Users/britleywrenhoff/git/claude-tools/.venv/bin/python \
+     /Users/britleywrenhoff/git/claude-tools/docs_pdf_bridge.py
+   ```
+
+3. `python3 docs_pdf_bridge.py --selftest` rebuilds the Alertis design PDF
+   without going through MCP.
+
+### Notes
+
+- `fpdf2` core fonts are latin-1 only, so all text is run through a Unicode
+  sanitiser first (curly quotes, en/em dashes, arrows, `…`, `•`, `≥`/`≤`).
+  The repo's writing style already avoids em dashes, so this rarely bites.
+- Code blocks auto-shrink their font (8.3pt down to 6pt) when a line is too
+  wide for the content column, so ASCII architecture diagrams fit.
+- `stock-alarm-service`'s `docs/pdf-build/build_system_design_pdf.py` is now
+  a thin shim that shells out to `--selftest`, so the old
+  `python3 docs/pdf-build/build_system_design_pdf.py` habit still works.
+  `build_database_answers_pdf.py` in that repo is left alone on purpose — it
+  is a standalone Q&A deliverable with no Markdown source.
+- Read-only apart from writing the target `.pdf`; safe to call unprompted
+  after a doc edit, unlike the publishing bridges.
+
 ## mcpo proxy
 
 Fronts `gemini-bridge`, `tn3270-bridge`, and `repo-bridge` with
