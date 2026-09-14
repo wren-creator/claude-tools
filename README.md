@@ -876,6 +876,52 @@ same handful of lookups per repo.
   change only ever happens through Claude Code's own guarded tool-call flow,
   not an HTTP client holding the proxy's API key.
 
+## port-tower-bridge
+
+Exposes three tools for a host-wide view of which TCP/UDP ports are taken
+and by what, across every Docker Compose project running on the machine —
+not just one repo:
+
+- `scan_ports()` — a live inventory of every listening port right now.
+  Docker ports are attributed to their compose project, working directory,
+  and container via `docker inspect`; everything else is attributed to
+  whatever process holds it via `lsof`.
+- `check_ports(ports)` — checks a specific list of port numbers against the
+  live scan and reports which are free and which are taken, and by what.
+- `check_compose_ports(compose_dir, files=None)` — reads the host ports a
+  project's own compose file(s) would publish (`docker compose config
+  --format json`, each service's `ports[].published`) and checks those
+  against the live scan, so a collision surfaces before `docker compose up`
+  fails partway through bringing up a whole stack.
+
+Shells out to `docker` and `lsof` only — no new dependencies.
+
+### Setup
+
+Register the server with Claude Code:
+```
+claude mcp add port-tower-bridge --scope user -- \
+  ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/port_tower_bridge.py
+```
+Restart Claude Code / reload the window.
+
+### Notes
+
+- Built 2026-09-14 after Packet River (`packetriver/`) and Widgetorium
+  (`widgetorium/`) both wanted host port 8080 at the same time while working
+  on Packet River's expansion-pack system — `gateway` failed to bind mid-`up`
+  with a raw Docker networking error, the kind of thing this tool now catches
+  up front via `check_compose_ports`.
+- `docker inspect`'s `NetworkSettings.Ports` is the source of truth for
+  Docker port attribution, not `docker ps`'s human-formatted `.Ports`
+  string — parsing the JSON structure directly avoids a second regex layer
+  and picks up `com.docker.compose.project.working_dir` off the same call,
+  which is what makes the "which repo is this" attribution possible.
+- `lsof`'s TCP listener rows have a trailing `(LISTEN)` token the NAME
+  column doesn't carry for UDP — `_lsof_listeners()` checks for that suffix
+  explicitly rather than assuming a fixed column count, which is what
+  earlier hand-testing against real `lsof` output caught before it shipped.
+
 ## playwright-bridge
 
 Exposes eight tools backed by [Playwright](https://playwright.dev/python/) for
