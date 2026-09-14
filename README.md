@@ -1003,10 +1003,19 @@ letting it leak. Every call is logged to `playwright_log.jsonl` (gitignored).
   so a Chromium version already fetched by either language's tooling is
   reused rather than re-fetched. Installing here once covers this bridge
   permanently; it does not need to be redone per project or per session.
-- Uses Playwright's **sync** API (`playwright.sync_api`), not `async_api` —
-  every tool function here is a plain synchronous function, consistent with
-  the rest of this repo's bridges (subprocess-based, no asyncio event loop
-  already running that would require the async variant instead).
+- Uses Playwright's **async** API (`playwright.async_api`), not `sync_api` —
+  every tool function is `async def` and awaits its Playwright calls.
+  FastMCP dispatches tool calls as coroutines on its own running asyncio
+  event loop, and Playwright's sync API refuses to run inside one at all
+  ("Playwright Sync API inside the asyncio loop" — fails every time, not
+  intermittently). Fixed 2026-09-14; the original sync version shipped this
+  way (an earlier note here claimed it was deliberate, for consistency with
+  this repo's other, subprocess-based bridges — that reasoning didn't hold,
+  since FastMCP's loop is there regardless of what an individual tool's own
+  code does). Verified by calling every tool function directly inside a live
+  `asyncio.run()` loop (the exact condition that broke before) against a
+  real page — launch, goto, evaluate, screenshot, get_requests, close all
+  passed.
 - `get_requests` exists specifically for the "did a network dependency
   actually get removed" class of check — the alternative (asking a human to
   open devtools, or scraping proxy/server logs) is slower and less precise

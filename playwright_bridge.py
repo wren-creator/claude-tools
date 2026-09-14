@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
-from playwright.sync_api import sync_playwright
+from playwright.async_api import async_playwright
 
 mcp = FastMCP("playwright-bridge")
 
@@ -17,6 +17,12 @@ DEFAULT_VIEWPORT = {"width": 1280, "height": 800}
 # itself is restarted. Browser *binaries* are cached on disk by `playwright
 # install` (see README setup) and never re-downloaded per session — only
 # the in-process browser/page objects are per-session state.
+#
+# Uses playwright.async_api, not sync_api: FastMCP dispatches tool calls as
+# coroutines on its own running asyncio event loop, and Playwright's sync
+# API refuses to run inside one ("Playwright Sync API inside the asyncio
+# loop" — it always fails, not intermittently). Every tool below is `async
+# def` and awaits its Playwright calls for exactly this reason.
 SESSIONS: dict[str, dict] = {}
 
 _BROWSER_TYPES = {"chromium", "firefox", "webkit"}
@@ -33,8 +39,8 @@ def _get_session(session_id: str) -> dict | None:
 
 
 @mcp.tool()
-def launch(browser: str = "chromium", headless: bool = True,
-           viewport_width: int = 0, viewport_height: int = 0) -> str:
+async def launch(browser: str = "chromium", headless: bool = True,
+                  viewport_width: int = 0, viewport_height: int = 0) -> str:
     """Launch a browser and return a session_id. Pass that session_id to
     goto/evaluate/screenshot/get_requests/click/fill/close.
 
@@ -54,14 +60,14 @@ def launch(browser: str = "chromium", headless: bool = True,
         return f"Error: browser must be one of {sorted(_BROWSER_TYPES)}, got '{browser}'"
 
     try:
-        pw = sync_playwright().start()
+        pw = await async_playwright().start()
         browser_type = getattr(pw, browser)
-        b = browser_type.launch(headless=headless)
+        b = await browser_type.launch(headless=headless)
         viewport = DEFAULT_VIEWPORT.copy()
         if viewport_width and viewport_height:
             viewport = {"width": viewport_width, "height": viewport_height}
-        context = b.new_context(viewport=viewport)
-        page = context.new_page()
+        context = await b.new_context(viewport=viewport)
+        page = await context.new_page()
     except Exception as e:
         _log({"tool": "launch", "browser": browser, "error": str(e)})
         return f"Error launching {browser}: {e}"
@@ -90,7 +96,7 @@ def launch(browser: str = "chromium", headless: bool = True,
 
 
 @mcp.tool()
-def goto(session_id: str, url: str, wait_until: str = "load") -> str:
+async def goto(session_id: str, url: str, wait_until: str = "load") -> str:
     """Navigate an open session's page to url. wait_until is one of "load",
     "domcontentloaded", "networkidle", or "commit" (same meaning as
     Playwright's own goto() option - "load" is a reasonable default,
@@ -104,10 +110,10 @@ def goto(session_id: str, url: str, wait_until: str = "load") -> str:
         return f"Error: no active session with id {session_id}"
 
     try:
-        response = session["page"].goto(url, wait_until=wait_until)
+        response = await session["page"].goto(url, wait_until=wait_until)
         result = {
             "url": session["page"].url,
-            "title": session["page"].title(),
+            "title": await session["page"].title(),
             "status": response.status if response else None,
         }
     except Exception as e:
@@ -119,7 +125,7 @@ def goto(session_id: str, url: str, wait_until: str = "load") -> str:
 
 
 @mcp.tool()
-def evaluate(session_id: str, script: str) -> str:
+async def evaluate(session_id: str, script: str) -> str:
     """Run JavaScript in an open session's page and return the JSON-encoded
     result. script is a JS expression or function body, same as Playwright's
     own page.evaluate() - e.g. "document.title", "() => document.title", or
@@ -136,7 +142,7 @@ def evaluate(session_id: str, script: str) -> str:
         return f"Error: no active session with id {session_id}"
 
     try:
-        result = session["page"].evaluate(script)
+        result = await session["page"].evaluate(script)
     except Exception as e:
         _log({"tool": "evaluate", "session_id": session_id, "script": script, "error": str(e)})
         return f"Error evaluating script: {e}"
@@ -147,7 +153,7 @@ def evaluate(session_id: str, script: str) -> str:
 
 
 @mcp.tool()
-def screenshot(session_id: str, output_path: str, full_page: bool = False, selector: str = "") -> str:
+async def screenshot(session_id: str, output_path: str, full_page: bool = False, selector: str = "") -> str:
     """Take a screenshot of an open session's page and save it to
     output_path (absolute path, .png). With selector set, screenshots just
     that element instead of the viewport/page. Returns output_path on
@@ -161,9 +167,9 @@ def screenshot(session_id: str, output_path: str, full_page: bool = False, selec
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         if selector:
-            session["page"].locator(selector).screenshot(path=str(path))
+            await session["page"].locator(selector).screenshot(path=str(path))
         else:
-            session["page"].screenshot(path=str(path), full_page=full_page)
+            await session["page"].screenshot(path=str(path), full_page=full_page)
     except Exception as e:
         _log({"tool": "screenshot", "session_id": session_id, "output_path": output_path, "error": str(e)})
         return f"Error taking screenshot: {e}"
@@ -195,7 +201,7 @@ def get_requests(session_id: str, url_contains: str = "") -> str:
 
 
 @mcp.tool()
-def click(session_id: str, selector: str, timeout_ms: int = 5000) -> str:
+async def click(session_id: str, selector: str, timeout_ms: int = 5000) -> str:
     """Click the first element matching selector (CSS, or Playwright's
     text=/role= selector syntax) in an open session's page."""
     session = _get_session(session_id)
@@ -203,7 +209,7 @@ def click(session_id: str, selector: str, timeout_ms: int = 5000) -> str:
         return f"Error: no active session with id {session_id}"
 
     try:
-        session["page"].click(selector, timeout=timeout_ms)
+        await session["page"].click(selector, timeout=timeout_ms)
     except Exception as e:
         _log({"tool": "click", "session_id": session_id, "selector": selector, "error": str(e)})
         return f"Error clicking '{selector}': {e}"
@@ -213,7 +219,7 @@ def click(session_id: str, selector: str, timeout_ms: int = 5000) -> str:
 
 
 @mcp.tool()
-def fill(session_id: str, selector: str, text: str, timeout_ms: int = 5000) -> str:
+async def fill(session_id: str, selector: str, text: str, timeout_ms: int = 5000) -> str:
     """Fill the first element matching selector (CSS, or Playwright's
     text=/role= selector syntax) with text in an open session's page,
     replacing any existing value."""
@@ -222,7 +228,7 @@ def fill(session_id: str, selector: str, text: str, timeout_ms: int = 5000) -> s
         return f"Error: no active session with id {session_id}"
 
     try:
-        session["page"].fill(selector, text, timeout=timeout_ms)
+        await session["page"].fill(selector, text, timeout=timeout_ms)
     except Exception as e:
         _log({"tool": "fill", "session_id": session_id, "selector": selector, "error": str(e)})
         return f"Error filling '{selector}': {e}"
@@ -232,16 +238,16 @@ def fill(session_id: str, selector: str, text: str, timeout_ms: int = 5000) -> s
 
 
 @mcp.tool()
-def close(session_id: str) -> str:
+async def close(session_id: str) -> str:
     """Close an open session's browser and free its resources."""
     session = SESSIONS.pop(session_id, None)
     if session is None:
         return f"Error: no active session with id {session_id}"
 
     try:
-        session["context"].close()
-        session["browser"].close()
-        session["playwright"].stop()
+        await session["context"].close()
+        await session["browser"].close()
+        await session["playwright"].stop()
     except Exception as e:
         _log({"tool": "close", "session_id": session_id, "error": str(e)})
         return f"Error closing session (resources may be partially freed): {e}"
