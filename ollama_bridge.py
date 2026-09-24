@@ -1,6 +1,6 @@
+import hashlib
 import json
 import re
-import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -8,12 +8,15 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from diff_utils import collect_diff
+
 mcp = FastMCP("ollama-bridge")
 
 LOG_PATH = Path(__file__).parent / "ollama_log.jsonl"
+CACHE_PATH = Path(__file__).parent / "prefilter_cache.json"
+CACHE_MAX = 200
 OLLAMA_HOST = "http://localhost:11434"
 OLLAMA_TIMEOUT = 60
-GIT_TIMEOUT = 30
 MAX_CONTEXT_CHARS = 20_000  # local 7B models have far less usable context than Gemini
 MAX_LOG_CHARS = 40_000  # logs run longer than diffs but still need a hard ceiling
 MAX_CHUNKS = 8  # bounds a huge diff to ~8 model calls instead of an unbounded wait
@@ -80,23 +83,6 @@ def _truncate_keep_tail(text: str, limit: int = MAX_LOG_CHARS) -> str:
     if len(text) <= limit:
         return text
     return f"[... truncated {len(text) - limit} chars from the start ...]\n\n" + text[-limit:]
-
-
-# Files whose diffs are noise to a reviewer: dependency lockfiles, minified or
-# generated bundles, images/fonts/archives. Excluded via git pathspecs so they
-# never eat the truncation budget (one logged diff was 1.5MB).
-DIFF_EXCLUDES = [
-    ":(exclude,glob)**/package-lock.json",
-    ":(exclude,glob)**/yarn.lock",
-    ":(exclude,glob)**/pnpm-lock.yaml",
-    ":(exclude,glob)**/poetry.lock",
-    ":(exclude,glob)**/Cargo.lock",
-    ":(exclude,glob)**/go.sum",
-    ":(exclude,glob)**/*.min.js",
-    ":(exclude,glob)**/*.min.css",
-    ":(exclude,glob)**/*.map",
-    ":(exclude,glob)**/*.{png,jpg,jpeg,gif,ico,webp,pdf,epub,zip,gz,tar,woff,woff2,ttf,mp4,mov}",
-]
 
 
 def _split_by_file(diff: str) -> list[str]:
@@ -200,70 +186,42 @@ def _call_ollama(prompt: str, model: str, num_ctx: int = DEFAULT_NUM_CTX) -> str
     return body.get("response", "").strip()
 
 
-def _git_diff(repo_path: str, args: list[str]) -> subprocess.CompletedProcess:
-    # --diff-filter=d drops deleted files: a deletion has no code left to review.
-    return subprocess.run(
-        ["git", "diff", "--diff-filter=d"] + args + ["--", "."] + DIFF_EXCLUDES,
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        timeout=GIT_TIMEOUT,
-    )
-
-
-def _untracked_diff(repo_path: str) -> str:
-    # `git diff` never shows untracked files, and the workflow reviews before
-    # staging, so brand-new files were invisible to the prefilter. Render each
-    # as an added-file diff. Skips binaries/oversized files and the same
-    # noise paths DIFF_EXCLUDES drops.
-    ls = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard", "-z", "--", "."] + DIFF_EXCLUDES,
-        cwd=repo_path, capture_output=True, text=True, timeout=GIT_TIMEOUT,
-    )
-    out = []
-    for rel in filter(None, ls.stdout.split("\0")):
-        f = Path(repo_path, rel)
-        try:
-            if not f.is_file() or f.stat().st_size > 200_000:
-                continue
-            text = f.read_text()  # UnicodeDecodeError means binary, skip it
-        except (OSError, UnicodeDecodeError):
-            continue
-        body = "".join(f"+{line}\n" for line in text.splitlines())
-        out.append(f"diff --git a/{rel} b/{rel}\nnew file mode 100644\n--- /dev/null\n+++ b/{rel}\n@@ -0,0 +1 @@\n{body}")
-    return "".join(out)
-
-
-@mcp.tool()
-def prefilter_diff(repo_path: str = ".", model: str = DEFAULT_MODEL) -> str:
-    """Run `git diff` in repo_path and send it to a local Ollama model for a
-    cheap first-pass triage, before spending a review_diff (Gemini) call on
-    it. Pass the absolute path of the repo being worked on - the bridge runs
-    as its own process and does not share Claude Code's cwd.
-    The response starts with 'CLEAN:' or 'FLAGGED:' - only call review_diff
-    afterward if it's FLAGGED. If this tool errors (e.g. Ollama isn't
-    running), fall back to review_diff directly rather than skipping review
-    entirely.
-    Also reviews untracked (new, not yet git-added) files, skips lockfiles,
-    binaries and deleted files, and splits a large diff per file instead of
-    truncating it. Checks, in order: uncommitted changes vs HEAD (staged + unstaged
-    together), then staged-only (works even in a repo with zero commits
-    yet), then plain unstaged - same order as review_diff.
-    """
+def _cache_load() -> dict:
     try:
-        diff = _git_diff(repo_path, ["HEAD"])
-        if diff.returncode != 0:
-            diff = _git_diff(repo_path, ["--cached"])
-        if diff.returncode == 0 and not diff.stdout.strip():
-            diff = _git_diff(repo_path, [])
-    except FileNotFoundError:
-        return f"Error: repo_path '{repo_path}' does not exist or `git` not found"
+        return json.loads(CACHE_PATH.read_text())
+    except (OSError, ValueError):
+        return {}
 
-    if diff.returncode != 0:
-        return f"Error running git diff: {diff.stderr.strip()}"
-    diff_text = diff.stdout + _untracked_diff(repo_path)
+
+def _cache_put(key: str, response: str) -> None:
+    cache = _cache_load()
+    cache[key] = response
+    for old in list(cache)[:-CACHE_MAX]:  # dicts keep insertion order, drop the oldest
+        del cache[old]
+    try:
+        CACHE_PATH.write_text(json.dumps(cache))
+    except OSError:
+        pass
+
+
+def run_prefilter(repo_path: str, model: str = DEFAULT_MODEL) -> str:
+    """Core of prefilter_diff, importable by other bridges (gemini-bridge's
+    commit_gate) without going through MCP."""
+    diff_text, err = collect_diff(repo_path)
+    if err:
+        return err
     if not diff_text.strip():
         return "No changes to review (checked against HEAD, staged, unstaged, and untracked)."
+
+    # Same diff + same model means the same verdict at temperature 0, so an
+    # unchanged diff (e.g. re-running the gate after a docs-only tweak elsewhere)
+    # skips the model entirely. Errors are never cached.
+    key = hashlib.sha256(f"{model}\0{diff_text}".encode()).hexdigest()
+    cached = _cache_load().get(key)
+    if cached:
+        _log({"tool": "prefilter_diff", "repo_path": repo_path, "model": model,
+              "diff_len": len(diff_text), "cache_hit": True, "response": cached})
+        return cached
 
     chunks = _chunk_diff(diff_text)
     skipped = max(0, len(chunks) - MAX_CHUNKS)
@@ -301,7 +259,28 @@ def prefilter_diff(repo_path: str = ".", model: str = DEFAULT_MODEL) -> str:
         "skipped_chunks": skipped,
         "response": response,
     })
+    if not errors:
+        _cache_put(key, response)
     return response
+
+
+@mcp.tool()
+def prefilter_diff(repo_path: str = ".", model: str = DEFAULT_MODEL) -> str:
+    """Run `git diff` in repo_path and send it to a local Ollama model for a
+    cheap first-pass triage, before spending a review_diff (Gemini) call on
+    it. Pass the absolute path of the repo being worked on - the bridge runs
+    as its own process and does not share Claude Code's cwd.
+    The response starts with 'CLEAN:' or 'FLAGGED:' - only call review_diff
+    afterward if it's FLAGGED. If this tool errors (e.g. Ollama isn't
+    running), fall back to review_diff directly rather than skipping review
+    entirely.
+    Also reviews untracked (new, not yet git-added) files, skips lockfiles,
+    binaries and deleted files, and splits a large diff per file instead of
+    truncating it. Checks, in order: uncommitted changes vs HEAD (staged + unstaged
+    together), then staged-only (works even in a repo with zero commits
+    yet), then plain unstaged - same order as review_diff.
+    """
+    return run_prefilter(repo_path, model)
 
 
 @mcp.tool()

@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 *.jsonl
 youtube_schedule_state.json
+prefilter_cache.json

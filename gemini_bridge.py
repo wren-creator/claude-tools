@@ -7,6 +7,8 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from diff_utils import collect_diff
+
 mcp = FastMCP("gemini-bridge")
 
 LOG_PATH = Path(__file__).parent / "log.jsonl"
@@ -16,6 +18,7 @@ GIT_TIMEOUT = 30
 MAX_CONTEXT_CHARS = 60_000  # guard against blowing past Gemini's context window
 MAX_FILE_CONTEXT_CHARS = 500_000  # ask_gemini_about_files exists specifically to use Gemini's much larger window
 NETWORK_CHECK_HOST = "generativelanguage.googleapis.com"
+RETRY_DELAYS = (2, 5, 10)  # seconds between attempts on a transient 503/connection reset
 NETWORK_CHECK_TIMEOUT = 5  # fail fast on a flaky connection instead of waiting GEMINI_TIMEOUT
 
 
@@ -54,7 +57,7 @@ def _network_reachable() -> bool:
         return False
 
 
-def _call_gemini(prompt: str) -> str:
+def _call_gemini_once(prompt: str) -> str:
     if not _network_reachable():
         return (
             f"Error calling Gemini: no network reachable to {NETWORK_CHECK_HOST} "
@@ -80,6 +83,25 @@ def _call_gemini(prompt: str) -> str:
     return result.stdout.strip()
 
 
+def _is_transient(err: str) -> bool:
+    # 503 "high demand" spikes and dropped connections usually clear in seconds.
+    # A 429 quota error does NOT: the daily quota won't reset in 10s, so
+    # retrying just burns time (and possibly more quota).
+    if "429" in err or "RESOURCE_EXHAUSTED" in err:
+        return False
+    return any(t in err for t in ("503", "UNAVAILABLE", "Connection reset", "ECONNRESET"))
+
+
+def _call_gemini(prompt: str) -> str:
+    response = _call_gemini_once(prompt)
+    for delay in RETRY_DELAYS:
+        if not (response.startswith("Error calling Gemini") and _is_transient(response)):
+            break
+        time.sleep(delay)
+        response = _call_gemini_once(prompt)
+    return response
+
+
 @mcp.tool()
 def ask_gemini(prompt: str, context: str = "") -> str:
     """Ask Gemini CLI a question and return its response.
@@ -98,16 +120,6 @@ def ask_gemini(prompt: str, context: str = "") -> str:
     return response
 
 
-def _git_diff(repo_path: str, args: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "diff"] + args,
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        timeout=GIT_TIMEOUT,
-    )
-
-
 @mcp.tool()
 def review_diff(
     repo_path: str = ".",
@@ -122,30 +134,53 @@ def review_diff(
     unstaged, so staged-only commits and brand-new repos aren't reported as
     having nothing to review.
     """
-    try:
-        # vs HEAD covers staged + unstaged together, but fails with no commits yet
-        diff = _git_diff(repo_path, ["HEAD"])
-        if diff.returncode != 0:
-            diff = _git_diff(repo_path, ["--cached"])
-        if diff.returncode == 0 and not diff.stdout.strip():
-            diff = _git_diff(repo_path, [])
-    except FileNotFoundError:
-        return f"Error: repo_path '{repo_path}' does not exist or `git` not found"
+    diff_text, err = collect_diff(repo_path)
+    if err:
+        return err
+    if not diff_text.strip():
+        return "No changes to review (checked against HEAD, staged, unstaged, and untracked)."
 
-    if diff.returncode != 0:
-        return f"Error running git diff: {diff.stderr.strip()}"
-    if not diff.stdout.strip():
-        return "No changes to review (checked against HEAD, staged, and unstaged)."
-
-    prompt = f"{instructions}\n\n```diff\n{_truncate(diff.stdout)}\n```"
+    prompt = f"{instructions}\n\n```diff\n{_truncate(diff_text)}\n```"
     response = _call_gemini(prompt)
+    fallback = False
+    if response.startswith("Error calling Gemini"):
+        # Gemini is down or out of quota: a local review beats no review.
+        # Imported lazily so this server doesn't need Ollama unless it's used.
+        from ollama_bridge import run_prefilter
+        local = run_prefilter(repo_path)
+        if not local.startswith("Error"):
+            response = f"[Gemini unavailable ({response[:120]}), local Ollama prefilter used instead]\n{local}"
+            fallback = True
     _log({
         "tool": "review_diff",
         "repo_path": repo_path,
         "instructions": instructions,
-        "diff_len": len(diff.stdout),
+        "diff_len": len(diff_text),
+        "fallback": fallback,
         "response": response,
     })
+    return response
+
+
+@mcp.tool()
+def commit_gate(repo_path: str = ".") -> str:
+    """One call for the pre-commit second opinion. Runs the local Ollama
+    prefilter first; only if it comes back FLAGGED (or errors) does it spend
+    a Gemini review_diff call, and returns a single verdict either way.
+    Replaces the two-step "prefilter_diff, then maybe review_diff" routine.
+    Pass the absolute path of the repo being worked on.
+    """
+    from ollama_bridge import run_prefilter
+    local = run_prefilter(repo_path)
+    if local.startswith("CLEAN") or local.startswith("No changes"):
+        _log({"tool": "commit_gate", "repo_path": repo_path, "escalated": False, "response": local})
+        return f"{local}\n(local prefilter only, Gemini not called)"
+    if local.startswith("FLAGGED"):
+        review = review_diff(repo_path)
+        response = f"Local prefilter: {local}\n\nGemini review:\n{review}"
+    else:  # Ollama errored (not running, timed out): go straight to Gemini
+        response = review_diff(repo_path)
+    _log({"tool": "commit_gate", "repo_path": repo_path, "escalated": True, "response": response})
     return response
 
 
