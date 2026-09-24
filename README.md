@@ -1533,5 +1533,6 @@ task actually sends.
       wrong-but-plausible logic, resource leaks across functions). The 8
       current cases are textbook, so 8/8 says the 7B model catches obvious
       bugs, not that it catches hard ones.
-- [ ] Point the global pre-commit workflow at `commit_gate` instead of
-      calling `prefilter_diff` then `review_diff` by hand.
+- [x] Point the global pre-commit workflow at `commit_gate` instead of
+      calling `prefilter_diff` then `review_diff` by hand (done 2026-09-24
+      in the global `~/.claude/CLAUDE.md`).
