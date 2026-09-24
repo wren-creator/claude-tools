@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import time
 import urllib.error
@@ -15,6 +16,7 @@ OLLAMA_TIMEOUT = 60
 GIT_TIMEOUT = 30
 MAX_CONTEXT_CHARS = 20_000  # local 7B models have far less usable context than Gemini
 MAX_LOG_CHARS = 40_000  # logs run longer than diffs but still need a hard ceiling
+MAX_CHUNKS = 8  # bounds a huge diff to ~8 model calls instead of an unbounded wait
 DEFAULT_MODEL = "qwen2.5-coder:7b"
 DEFAULT_NUM_CTX = 8192
 LOG_NUM_CTX = 24576  # generous headroom over MAX_LOG_CHARS even at a dense ~2 chars/token
@@ -80,6 +82,65 @@ def _truncate_keep_tail(text: str, limit: int = MAX_LOG_CHARS) -> str:
     return f"[... truncated {len(text) - limit} chars from the start ...]\n\n" + text[-limit:]
 
 
+# Files whose diffs are noise to a reviewer: dependency lockfiles, minified or
+# generated bundles, images/fonts/archives. Excluded via git pathspecs so they
+# never eat the truncation budget (one logged diff was 1.5MB).
+DIFF_EXCLUDES = [
+    ":(exclude,glob)**/package-lock.json",
+    ":(exclude,glob)**/yarn.lock",
+    ":(exclude,glob)**/pnpm-lock.yaml",
+    ":(exclude,glob)**/poetry.lock",
+    ":(exclude,glob)**/Cargo.lock",
+    ":(exclude,glob)**/go.sum",
+    ":(exclude,glob)**/*.min.js",
+    ":(exclude,glob)**/*.min.css",
+    ":(exclude,glob)**/*.map",
+    ":(exclude,glob)**/*.{png,jpg,jpeg,gif,ico,webp,pdf,epub,zip,gz,tar,woff,woff2,ttf,mp4,mov}",
+]
+
+
+def _split_by_file(diff: str) -> list[str]:
+    parts = re.split(r"(?m)^(?=diff --git )", diff)
+    return [p for p in parts if p.strip()]
+
+
+def _split_oversized(file_diff: str, limit: int) -> list[str]:
+    # A single file bigger than one chunk: split on hunk boundaries, repeating
+    # the file header so each piece still says which file it belongs to.
+    head, *hunks = re.split(r"(?m)^(?=@@ )", file_diff)
+    pieces, cur = [], head
+    for h in hunks:
+        if len(cur) + len(h) > limit and cur != head:
+            pieces.append(cur)
+            cur = head
+        cur += h
+    pieces.append(cur)
+    return [_truncate(p, limit) for p in pieces]  # a single giant hunk still gets capped
+
+
+def _chunk_diff(diff: str, limit: int = MAX_CONTEXT_CHARS) -> list[str]:
+    chunks, cur = [], ""
+    for f in _split_by_file(diff):
+        for piece in ([f] if len(f) <= limit else _split_oversized(f, limit)):
+            if cur and len(cur) + len(piece) > limit:
+                chunks.append(cur)
+                cur = ""
+            cur += piece
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def _verdict(response: str) -> str:
+    # The 7B model occasionally answers in some other shape (a JSON blob, for
+    # instance). Anything that isn't a clean CLEAN/FLAGGED/Error gets escalated
+    # rather than trusted, so the caller's "only review if FLAGGED" rule fails safe.
+    r = response.strip()
+    if r.startswith(("CLEAN", "FLAGGED", "Error")):
+        return r
+    return f"FLAGGED: local model gave an unparseable reply, escalate.\n{r[:300]}"
+
+
 def _fmt_ts(seconds: float) -> str:
     m, s = divmod(int(seconds), 60)
     return f"{m:02d}:{s:02d}"
@@ -140,13 +201,37 @@ def _call_ollama(prompt: str, model: str, num_ctx: int = DEFAULT_NUM_CTX) -> str
 
 
 def _git_diff(repo_path: str, args: list[str]) -> subprocess.CompletedProcess:
+    # --diff-filter=d drops deleted files: a deletion has no code left to review.
     return subprocess.run(
-        ["git", "diff"] + args,
+        ["git", "diff", "--diff-filter=d"] + args + ["--", "."] + DIFF_EXCLUDES,
         cwd=repo_path,
         capture_output=True,
         text=True,
         timeout=GIT_TIMEOUT,
     )
+
+
+def _untracked_diff(repo_path: str) -> str:
+    # `git diff` never shows untracked files, and the workflow reviews before
+    # staging, so brand-new files were invisible to the prefilter. Render each
+    # as an added-file diff. Skips binaries/oversized files and the same
+    # noise paths DIFF_EXCLUDES drops.
+    ls = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z", "--", "."] + DIFF_EXCLUDES,
+        cwd=repo_path, capture_output=True, text=True, timeout=GIT_TIMEOUT,
+    )
+    out = []
+    for rel in filter(None, ls.stdout.split("\0")):
+        f = Path(repo_path, rel)
+        try:
+            if not f.is_file() or f.stat().st_size > 200_000:
+                continue
+            text = f.read_text()  # UnicodeDecodeError means binary, skip it
+        except (OSError, UnicodeDecodeError):
+            continue
+        body = "".join(f"+{line}\n" for line in text.splitlines())
+        out.append(f"diff --git a/{rel} b/{rel}\nnew file mode 100644\n--- /dev/null\n+++ b/{rel}\n@@ -0,0 +1 @@\n{body}")
+    return "".join(out)
 
 
 @mcp.tool()
@@ -159,7 +244,9 @@ def prefilter_diff(repo_path: str = ".", model: str = DEFAULT_MODEL) -> str:
     afterward if it's FLAGGED. If this tool errors (e.g. Ollama isn't
     running), fall back to review_diff directly rather than skipping review
     entirely.
-    Checks, in order: uncommitted changes vs HEAD (staged + unstaged
+    Also reviews untracked (new, not yet git-added) files, skips lockfiles,
+    binaries and deleted files, and splits a large diff per file instead of
+    truncating it. Checks, in order: uncommitted changes vs HEAD (staged + unstaged
     together), then staged-only (works even in a repo with zero commits
     yet), then plain unstaged - same order as review_diff.
     """
@@ -174,16 +261,44 @@ def prefilter_diff(repo_path: str = ".", model: str = DEFAULT_MODEL) -> str:
 
     if diff.returncode != 0:
         return f"Error running git diff: {diff.stderr.strip()}"
-    if not diff.stdout.strip():
-        return "No changes to review (checked against HEAD, staged, and unstaged)."
+    diff_text = diff.stdout + _untracked_diff(repo_path)
+    if not diff_text.strip():
+        return "No changes to review (checked against HEAD, staged, unstaged, and untracked)."
 
-    prompt = f"{PREFILTER_INSTRUCTIONS}\n\n```diff\n{_truncate(diff.stdout)}\n```"
-    response = _call_ollama(prompt, model)
+    chunks = _chunk_diff(diff_text)
+    skipped = max(0, len(chunks) - MAX_CHUNKS)
+    chunks = chunks[:MAX_CHUNKS]
+    flagged, errors = [], []
+    for i, chunk in enumerate(chunks, 1):
+        prompt = f"{PREFILTER_INSTRUCTIONS}\n\n```diff\n{chunk}\n```"
+        r = _verdict(_call_ollama(prompt, model))
+        if r.startswith("Error"):
+            errors.append(r)
+        elif r.startswith("FLAGGED"):
+            flagged.append(r if len(chunks) == 1 else f"[part {i}/{len(chunks)}] {r}")
+
+    if errors:
+        response = errors[0]  # caller falls back to review_diff on any error
+    elif flagged:
+        # Lead with FLAGGED so the documented "starts with CLEAN/FLAGGED" holds
+        # even for a multi-chunk diff whose first part was clean.
+        response = "\n\n".join(flagged)
+        if not response.startswith("FLAGGED"):
+            response = "FLAGGED: see parts below.\n" + response
+    else:
+        response = "CLEAN: no issues found."
+    if skipped and not errors:
+        response = (
+            f"FLAGGED: diff too large, {skipped} chunk(s) not reviewed locally, escalate.\n"
+            + response
+        )
     _log({
         "tool": "prefilter_diff",
         "repo_path": repo_path,
         "model": model,
-        "diff_len": len(diff.stdout),
+        "diff_len": len(diff_text),
+        "chunks": len(chunks),
+        "skipped_chunks": skipped,
         "response": response,
     })
     return response

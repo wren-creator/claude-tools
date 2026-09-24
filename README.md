@@ -91,7 +91,15 @@ instance:
   triage before spending a `review_diff` (Gemini) call on it. The response
   starts with `CLEAN:` or `FLAGGED:` — only escalate to `review_diff` when
   it's `FLAGGED`, or when this tool errors (e.g. Ollama isn't running); never
-  skip review outright just because the local pass errored.
+  skip review outright just because the local pass errored. It reviews
+  untracked (new, not yet `git add`ed) files too, skips lockfiles, minified
+  bundles, images/archives and deleted files, splits a big diff per file
+  (up to 8 chunks) instead of head-truncating it, and treats any reply that
+  isn't a clean `CLEAN`/`FLAGGED` as `FLAGGED` so it fails safe. If more than
+  8 chunks are needed it says so and escalates. `prefilter_recall_test.py`
+  plants 8 real bugs and 4 harmless edits in throwaway repos and reports
+  recall and false positives (2026-09-24: 8/8 caught, 0/4 false positives,
+  needs Ollama running).
 - `triage_log(repo_path, log_path, model="qwen2.5-coder:7b")` — reads a
   build/test log already written to disk (redirect a failing command's
   output first, e.g. `cmd > out.log 2>&1`) and sends it to a local Ollama
