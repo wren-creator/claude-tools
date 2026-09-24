@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 import uuid
@@ -27,6 +28,12 @@ SESSIONS: dict[str, dict] = {}
 
 _BROWSER_TYPES = {"chromium", "firefox", "webkit"}
 
+# Sessions idle longer than this get closed by the reaper. Each one is a real
+# browser process; a forgotten session otherwise lives until the server dies.
+IDLE_TIMEOUT_S = 600
+REAP_INTERVAL_S = 60
+_reaper_task: asyncio.Task | None = None
+
 
 def _log(entry: dict) -> None:
     entry["timestamp"] = time.time()
@@ -35,7 +42,38 @@ def _log(entry: dict) -> None:
 
 
 def _get_session(session_id: str) -> dict | None:
-    return SESSIONS.get(session_id)
+    session = SESSIONS.get(session_id)
+    if session is not None:
+        session["last_used"] = time.time()
+    return session
+
+
+async def _shutdown(session: dict) -> None:
+    # Close each layer independently so one failure doesn't strand the rest.
+    for key, method in (("context", "close"), ("browser", "close"), ("playwright", "stop")):
+        obj = session.get(key)
+        if obj is not None:
+            try:
+                await getattr(obj, method)()
+            except Exception:
+                pass
+
+
+async def _reap_idle() -> None:
+    while True:
+        await asyncio.sleep(REAP_INTERVAL_S)
+        cutoff = time.time() - IDLE_TIMEOUT_S
+        for sid in [k for k, v in SESSIONS.items() if v.get("last_used", 0) < cutoff]:
+            session = SESSIONS.pop(sid, None)
+            if session is not None:
+                await _shutdown(session)
+                _log({"tool": "reaper", "session_id": sid, "reason": f"idle over {IDLE_TIMEOUT_S}s"})
+
+
+def _ensure_reaper() -> None:
+    global _reaper_task
+    if _reaper_task is None or _reaper_task.done():
+        _reaper_task = asyncio.get_running_loop().create_task(_reap_idle())
 
 
 @mcp.tool()
@@ -59,16 +97,19 @@ async def launch(browser: str = "chromium", headless: bool = True,
     if browser not in _BROWSER_TYPES:
         return f"Error: browser must be one of {sorted(_BROWSER_TYPES)}, got '{browser}'"
 
+    _ensure_reaper()
+    parts: dict = {}
     try:
-        pw = await async_playwright().start()
+        pw = parts["playwright"] = await async_playwright().start()
         browser_type = getattr(pw, browser)
-        b = await browser_type.launch(headless=headless)
+        b = parts["browser"] = await browser_type.launch(headless=headless)
         viewport = DEFAULT_VIEWPORT.copy()
         if viewport_width and viewport_height:
             viewport = {"width": viewport_width, "height": viewport_height}
-        context = await b.new_context(viewport=viewport)
+        context = parts["context"] = await b.new_context(viewport=viewport)
         page = await context.new_page()
     except Exception as e:
+        await _shutdown(parts)  # a failed launch used to strand its Playwright driver
         _log({"tool": "launch", "browser": browser, "error": str(e)})
         return f"Error launching {browser}: {e}"
 
@@ -89,7 +130,7 @@ async def launch(browser: str = "chromium", headless: bool = True,
 
     SESSIONS[session_id] = {
         "playwright": pw, "browser": b, "context": context, "page": page,
-        "requests": requests,
+        "requests": requests, "last_used": time.time(),
     }
     _log({"tool": "launch", "browser": browser, "headless": headless, "session_id": session_id})
     return session_id
@@ -158,6 +199,9 @@ async def screenshot(session_id: str, output_path: str, full_page: bool = False,
     output_path (absolute path, .png). With selector set, screenshots just
     that element instead of the viewport/page. Returns output_path on
     success - read it back with Claude Code's own Read tool to view it.
+    A .jpg/.jpeg output_path saves a quality-60 JPEG, roughly a third smaller
+    than PNG on a busy page (no gain on a near-blank one). Prefer snapshot when you only
+    need to know what's on the page, not how it looks.
     """
     session = _get_session(session_id)
     if session is None:
@@ -166,10 +210,13 @@ async def screenshot(session_id: str, output_path: str, full_page: bool = False,
     try:
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        opts = {"path": str(path)}
+        if path.suffix.lower() in (".jpg", ".jpeg"):
+            opts.update(type="jpeg", quality=60)
         if selector:
-            await session["page"].locator(selector).screenshot(path=str(path))
+            await session["page"].locator(selector).screenshot(**opts)
         else:
-            await session["page"].screenshot(path=str(path), full_page=full_page)
+            await session["page"].screenshot(full_page=full_page, **opts)
     except Exception as e:
         _log({"tool": "screenshot", "session_id": session_id, "output_path": output_path, "error": str(e)})
         return f"Error taking screenshot: {e}"
@@ -238,20 +285,86 @@ async def fill(session_id: str, selector: str, text: str, timeout_ms: int = 5000
 
 
 @mcp.tool()
+async def snapshot(session_id: str, selector: str = "body", max_chars: int = 6000) -> str:
+    """Return the page (or the element at selector) as Playwright's ARIA
+    snapshot: a compact YAML outline of roles, names and text, e.g.
+    `- button "Submit"`. Far cheaper than a screenshot for finding what to
+    click or confirming what text is on screen. Truncated to max_chars.
+    """
+    session = _get_session(session_id)
+    if session is None:
+        return f"Error: no active session with id {session_id}"
+
+    try:
+        text = await session["page"].locator(selector).aria_snapshot()
+    except Exception as e:
+        _log({"tool": "snapshot", "session_id": session_id, "selector": selector, "error": str(e)})
+        return f"Error taking snapshot of '{selector}': {e}"
+
+    if len(text) > max_chars:
+        text = text[:max_chars] + f"\n[... truncated {len(text) - max_chars} chars ...]"
+    _log({"tool": "snapshot", "session_id": session_id, "selector": selector, "chars": len(text)})
+    return text
+
+
+_STEP_LIMIT = 2000  # per-step result cap so a chatty evaluate can't flood the reply
+
+
+@mcp.tool()
+async def run_steps(session_id: str, steps: list[dict], stop_on_error: bool = True) -> str:
+    """Run several actions in one call instead of one round trip each.
+    steps is a list of objects, each with an "action" and its arguments:
+      {"action": "goto", "url": "...", "wait_until": "load"}
+      {"action": "click", "selector": "..."}
+      {"action": "fill", "selector": "...", "text": "..."}
+      {"action": "evaluate", "script": "..."}
+      {"action": "snapshot", "selector": "body"}
+      {"action": "screenshot", "output_path": "/abs/path.png", "full_page": false}
+      {"action": "wait_for", "selector": "...", "timeout_ms": 5000}
+    Returns a JSON list of {"step", "action", "result"}. Stops at the first
+    error unless stop_on_error is false; the failing step is marked "error".
+    """
+    if _get_session(session_id) is None:
+        return f"Error: no active session with id {session_id}"
+
+    async def wait_for(session_id: str, selector: str, timeout_ms: int = 5000) -> str:
+        try:
+            await SESSIONS[session_id]["page"].wait_for_selector(selector, timeout=timeout_ms)
+        except Exception as e:
+            return f"Error waiting for '{selector}': {e}"
+        return f"Found '{selector}'"
+
+    handlers = {"goto": goto, "click": click, "fill": fill, "evaluate": evaluate,
+                "snapshot": snapshot, "screenshot": screenshot, "wait_for": wait_for}
+    results = []
+    for i, step in enumerate(steps, 1):
+        action = step.get("action")
+        fn = handlers.get(action)
+        if fn is None:
+            out = f"Error: unknown action '{action}', expected one of {sorted(handlers)}"
+        else:
+            args = {k: v for k, v in step.items() if k != "action"}
+            try:
+                out = await fn(session_id, **args)
+            except TypeError as e:  # a missing or misspelled argument
+                out = f"Error: bad arguments for '{action}': {e}"
+        failed = out.startswith("Error")
+        results.append({"step": i, "action": action,
+                        ("error" if failed else "result"): out[:_STEP_LIMIT]})
+        if failed and stop_on_error:
+            break
+    _log({"tool": "run_steps", "session_id": session_id, "steps": len(steps), "ran": len(results)})
+    return json.dumps(results)
+
+
+@mcp.tool()
 async def close(session_id: str) -> str:
     """Close an open session's browser and free its resources."""
     session = SESSIONS.pop(session_id, None)
     if session is None:
         return f"Error: no active session with id {session_id}"
 
-    try:
-        await session["context"].close()
-        await session["browser"].close()
-        await session["playwright"].stop()
-    except Exception as e:
-        _log({"tool": "close", "session_id": session_id, "error": str(e)})
-        return f"Error closing session (resources may be partially freed): {e}"
-
+    await _shutdown(session)
     _log({"tool": "close", "session_id": session_id})
     return f"Closed session {session_id}"
 
