@@ -4,14 +4,22 @@ Local MCP servers that give Claude Code access to other tools mid-session.
 
 ## gemini-bridge
 
-Exposes three tools backed by the [Gemini CLI](https://google-gemini.github.io/gemini-cli/):
+Exposes four tools backed by the [Gemini CLI](https://google-gemini.github.io/gemini-cli/):
 
 - `ask_gemini(prompt, context="")` — ask Gemini a question, e.g. for a second
   opinion on an approach.
 - `review_diff(repo_path, instructions="")` — runs `git diff` in `repo_path`
   and sends it to Gemini for critique. Pass the absolute path of the repo you
   want reviewed; the bridge runs as its own background process and does not
-  share Claude Code's working directory.
+  share Claude Code's working directory. Reviews untracked new files too and
+  skips lockfiles, binaries and deleted files (shared `diff_utils.py`, same
+  as `prefilter_diff`). If Gemini errors out (quota, outage) it falls back to
+  the local Ollama prefilter and says so in the reply, rather than leaving
+  the diff unreviewed.
+- `commit_gate(repo_path)` — the one-call pre-commit check: runs the local
+  Ollama prefilter and only spends a Gemini `review_diff` call if it comes
+  back `FLAGGED` or errors. Replaces the two-step "prefilter, then maybe
+  review" routine with a single call and a single verdict.
 - `ask_gemini_about_files(file_paths, question)` — reads one or more full
   files and asks Gemini a question about them. Use this instead of
   `ask_gemini`'s `context` param when the files are too large for Claude's
@@ -23,6 +31,11 @@ Exposes three tools backed by the [Gemini CLI](https://google-gemini.github.io/g
 
 Every call is logged to `log.jsonl` (gitignored) as an audit trail of what
 was asked and answered.
+
+Gemini calls retry up to three times (2s, 5s, 10s) on a transient 503 or
+dropped connection. A 429 quota error is *not* retried: the daily quota won't
+reset in ten seconds. Measured 2026-09-24 from the log: 5 of 36 `review_diff`
+calls had failed (four 503s, one 429), which is what this covers.
 
 ### Setup
 
@@ -932,7 +945,7 @@ Restart Claude Code / reload the window.
 
 ## playwright-bridge
 
-Exposes eight tools backed by [Playwright](https://playwright.dev/python/) for
+Exposes ten tools backed by [Playwright](https://playwright.dev/python/) for
 driving a real browser mid-session, e.g. to visually verify a UI/CSS fix or
 confirm a network dependency is (or isn't) actually being hit:
 
@@ -952,7 +965,15 @@ confirm a network dependency is (or isn't) actually being hit:
 - `screenshot(session_id, output_path, full_page=False, selector="")` —
   saves a PNG to `output_path` (absolute path); read it back with Claude
   Code's own `Read` tool to view it. With `selector` set, screenshots just
-  that element.
+  that element. A `.jpg` path saves a quality-60 JPEG instead, about a third
+  smaller on a busy page (no gain on a near-blank one).
+- `snapshot(session_id, selector="body", max_chars=6000)` — the page as a
+  compact ARIA outline (`- button "Submit"`). Much cheaper than a screenshot
+  when you only need to know what is on the page or what to click.
+- `run_steps(session_id, steps, stop_on_error=True)` — a batch of `goto`,
+  `click`, `fill`, `evaluate`, `snapshot`, `screenshot` and `wait_for` steps
+  in one call instead of one round trip each. Returns a JSON list of per-step
+  results and stops at the first error by default.
 - `get_requests(session_id, url_contains="")` — every network request made
   since `launch()`, as JSON `[{"url", "method", "resource_type", "status"},
   ...]`. With `url_contains` set, filters to matching URLs — e.g. confirm a
@@ -964,8 +985,9 @@ confirm a network dependency is (or isn't) actually being hit:
 - `close(session_id)` — closes the browser and frees its resources.
 
 Sessions live in memory for the lifetime of the server process (one per
-Claude Code session) — `close` any session you're done with rather than
-letting it leak. Every call is logged to `playwright_log.jsonl` (gitignored).
+Claude Code session). `close` any session you're done with; a background
+reaper also closes any session idle for 10 minutes, and a failed `launch`
+now shuts down its own Playwright driver instead of stranding it. Every call is logged to `playwright_log.jsonl` (gitignored).
 
 ### Setup
 
@@ -1502,3 +1524,14 @@ task actually sends.
       above for the full writeup, including the `"process"`-type (not
       `"shell"`) task design that keeps an arbitrary code selection from
       being able to inject into the command line.
+- [x] Bridge load review (2026-09-24, from the tool logs): `prefilter_diff`
+      reviews new files, drops lockfiles/binaries/deletions and chunks per
+      file; `review_diff` retries 503s and falls back to the local prefilter;
+      `commit_gate` does prefilter-then-maybe-Gemini in one call; playwright
+      gets `snapshot`, `run_steps`, JPEG screenshots and an idle reaper.
+- [ ] `prefilter_recall_test.py`: add subtler seeded bugs (race conditions,
+      wrong-but-plausible logic, resource leaks across functions). The 8
+      current cases are textbook, so 8/8 says the 7B model catches obvious
+      bugs, not that it catches hard ones.
+- [ ] Point the global pre-commit workflow at `commit_gate` instead of
+      calling `prefilter_diff` then `review_diff` by hand.
