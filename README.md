@@ -279,6 +279,13 @@ letting it leak. Every call is logged to `tn3270_log.jsonl` (gitignored).
 
 ### Notes
 
+- `connect` has a hard 15s deadline. py3270's own `timeout` only covers
+  `Wait()`, so a host that stalls negotiation used to hang the tool call for
+  the full harness timeout. The usual culprit is a host that agrees to TN3270E
+  `BIND-IMAGE` but never sends a BIND: s3270 stays in `connected-unbound` and
+  `Connect()` never returns. On overrun the bridge kills s3270 and returns an
+  error saying so. A host should either send the BIND or leave `BIND-IMAGE`
+  out of its `FUNCTIONS IS` reply.
 - Plain-text `read_screen` uses x3270's `Ascii()` script command. Structured
   mode uses `ReadBuffer(Ascii)`, which annotates the buffer with `SF(...)`
   markers at each field's attribute byte; the byte's bits are decoded per
