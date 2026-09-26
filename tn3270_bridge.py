@@ -1,5 +1,6 @@
 import json
 import re
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -170,6 +171,39 @@ def _panel_state(plain_text: str, structured: dict) -> dict:
     }
 
 
+def _connect_with_deadline(emulator: py3270.Emulator, target: str) -> None:
+    # py3270's `timeout` only feeds Wait(); the blocking readline() on
+    # s3270's stdout has no deadline, so a host that never completes
+    # negotiation (e.g. TN3270E BIND-IMAGE agreed but no BIND ever sent, so
+    # s3270 sits in connected-unbound and Connect() never returns) hangs the
+    # whole tool call. Run it in a thread and kill s3270 if it overruns,
+    # which closes its stdout and unblocks the reader.
+    outcome: dict = {}
+
+    def _run() -> None:
+        try:
+            emulator.connect(target)
+        except Exception as e:
+            outcome["error"] = e
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(CONNECT_TIMEOUT)
+    if worker.is_alive():
+        try:
+            emulator.app.sp.kill()
+        except Exception:
+            pass
+        worker.join(2)
+        raise TimeoutError(
+            f"no response from s3270 within {CONNECT_TIMEOUT}s. TCP connected but "
+            "TN3270(E) negotiation never completed. If the host negotiates TN3270E "
+            "BIND-IMAGE, it must send a BIND before s3270 leaves connected-unbound."
+        )
+    if "error" in outcome:
+        raise outcome["error"]
+
+
 @mcp.tool()
 def connect(host: str, port: int = 23) -> str:
     """Open a TN3270 session to a mainframe host and return a session_id.
@@ -177,7 +211,7 @@ def connect(host: str, port: int = 23) -> str:
     """
     emulator = py3270.Emulator(visible=False, timeout=CONNECT_TIMEOUT)
     try:
-        emulator.connect(f"{host}:{port}")
+        _connect_with_deadline(emulator, f"{host}:{port}")
     except Exception as e:
         emulator.terminate()
         _log({"tool": "connect", "host": host, "port": port, "error": str(e)})
