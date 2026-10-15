@@ -1202,6 +1202,35 @@ works under `--offline`. Calls are logged to `rag_log.jsonl` (gitignored).
 - Indexes are plain text on disk. The secret-file skip list is by filename,
   so a secret pasted into an ordinary source file would get embedded.
 
+## sandbox-write-bridge
+
+The one place the local Ollama chat is allowed to write. It exists so the chat
+can draft Markdown and then hand it to `docs-pdf-bridge`'s `build_pdf`, without
+giving a 7B model a general file-writing tool. Claude Code already has its own
+Write tool, so this one is not registered with it, only fronted by `mcpo`.
+
+- `write_file(filename, content, overwrite=False)` writes into
+  `~/ollama-output/` (created on first use) and returns the absolute path.
+- `list_output_files()` shows what is there.
+
+The guardrails are the point:
+- Bare filenames only (`[A-Za-z0-9._-]`, no slashes, no leading dot), so
+  there's no path to climb out of the folder with.
+- Extensions limited to `.md`, `.txt`, `.csv`, `.json`. No scripts, and PDFs
+  come from `build_pdf`.
+- Never replaces an existing file unless `overwrite=True`; refuses to write
+  through a symlink; 200KB cap. macOS ignores case, so `A.MD` counts as
+  `a.md`.
+- Works under `--offline`. Writes are logged to `sandbox_write_log.jsonl`
+  (gitignored).
+
+Typical chat flow: `write_file("report.md", ...)` then `build_pdf(source=
+"~/ollama-output/report.md", output="~/ollama-output/report.pdf")`.
+
+Limits: this bounds the write tool, not the whole stack. `build_pdf` still
+accepts any output path, and anyone holding the `mcpo` API key can call
+`write_file` directly (it can only ever write into that folder).
+
 ## mcpo proxy
 
 Fronts `gemini-bridge`, `tn3270-bridge`, and `repo-bridge` with
@@ -1254,6 +1283,7 @@ a local Ollama model actually call the tools `mcpo` fronts, over plain HTTP:
 - `rag-bridge` (local semantic search)
 - `ollama-bridge` (`prefilter_diff` and friends, the local-only review that
   still works under `--offline`)
+- `sandbox-write-bridge` (`write_file`, `list_output_files`; see below)
 - `docs-pdf-bridge` (`build_pdf`)
 - `port-tower-bridge`, `slack-digest-bridge`, `github-audit-bridge`
 - `tn3270-bridge`, `repo-bridge`
@@ -1429,8 +1459,11 @@ task actually sends.
 
 - [x] Add `rag-bridge`: local semantic search over indexed folders using
       nomic-embed-text, usable from Claude Code and the Ollama chat.
-- [ ] Sandboxed write-file tool (one output directory) so the Ollama chat can
-      write Markdown before calling `build_pdf`.
+- [x] `sandbox-write-bridge`: sandboxed write-file tool (one output
+      directory) so the Ollama chat can write Markdown before calling
+      `build_pdf`.
+- [ ] Constrain `build_pdf`'s output path to `~/ollama-output` when called
+      through the Ollama chat (it currently accepts any path).
 - [x] Add a third gemini-bridge tool for querying Gemini's larger context
       window on full files, not just diffs.
 - [x] repo-bridge: expand `get_symbol` language support beyond

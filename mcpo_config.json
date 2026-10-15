@@ -20,6 +20,10 @@
       "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
       "args": ["/Users/britleywrenhoff/git/claude-tools/ollama_bridge.py"]
     },
+    "sandbox-write-bridge": {
+      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
+      "args": ["/Users/britleywrenhoff/git/claude-tools/sandbox_write_bridge.py"]
+    },
     "docs-pdf-bridge": {
       "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
       "args": ["/Users/britleywrenhoff/git/claude-tools/docs_pdf_bridge.py"]
