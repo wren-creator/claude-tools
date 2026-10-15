@@ -37,7 +37,11 @@ OLLAMA_TIMEOUT = 120  # local 14b tool-calling turns are slower than a
 # plain triage prompt
 MCPO_TIMEOUT = 60
 MAX_TOOL_ITERATIONS = 8
-NETWORK_DEPENDENT_SERVERS = {"gemini-bridge"}  # needs real internet access;
+BLOCKED_TOOLS = {"github-audit-bridge__enable_dependabot"}  # mutates real
+# repos (PUT requests); mcpo can only expose a whole server, so the write
+# tool is filtered out here and the model never sees it. Note this guards the
+# chat model only - anyone holding the mcpo API key can still call it directly.
+NETWORK_DEPENDENT_SERVERS = {"gemini-bridge", "slack-digest-bridge", "github-audit-bridge"}  # needs real internet access;
 # excluded outright by --offline rather than just told not to use them -
 # confirmed live 2026-08-11 that a soft instruction isn't enough, the model
 # called gemini-bridge__ask_gemini 8 times in a row rephrasing the same
@@ -47,7 +51,14 @@ NETWORK_DEPENDENT_SERVERS = {"gemini-bridge"}  # needs real internet access;
 SYSTEM_PROMPT = (
     "You are a local coding assistant with tool access to a codebase "
     "(search/read files, find symbol definitions), a second-opinion "
-    "coding model (Gemini), and TN3270 mainframe sessions. Use a tool "
+    "coding model (Gemini) that can also review a repo's uncommitted "
+    "changes before commit (gemini-bridge__commit_gate, pass the repo's "
+    "absolute path), a Markdown-to-PDF builder (docs-pdf-bridge__build_pdf, "
+    "absolute source and output paths), a local-only diff check that works "
+    "offline (ollama-bridge__prefilter_diff, absolute repo path), and "
+    "local port checks (port-tower-bridge), Slack thread summaries "
+    "(slack-digest-bridge__digest_thread), read-only GitHub audits "
+    "(github-audit-bridge), and TN3270 mainframe sessions. Use a tool "
     "when it would get a better answer than guessing - e.g. read the "
     "actual file instead of assuming its contents. Always call tools "
     "using their exact full name as given (e.g. 'repo-bridge__get_file', "
@@ -136,6 +147,8 @@ def fetch_mcpo_tools(mcpo_url: str, config_path: Path, exclude_servers: frozense
                 continue
             tool_name = path.strip("/")
             func_name = f"{server}__{tool_name}"
+            if func_name in BLOCKED_TOOLS:
+                continue
 
             schema = {"type": "object", "properties": {}}
             try:

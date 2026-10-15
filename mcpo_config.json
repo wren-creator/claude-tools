@@ -8,6 +8,26 @@
       "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
       "args": ["/Users/britleywrenhoff/git/claude-tools/tn3270_bridge.py"]
     },
+    "port-tower-bridge": {
+      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
+      "args": ["/Users/britleywrenhoff/git/claude-tools/port_tower_bridge.py"]
+    },
+    "ollama-bridge": {
+      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
+      "args": ["/Users/britleywrenhoff/git/claude-tools/ollama_bridge.py"]
+    },
+    "docs-pdf-bridge": {
+      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
+      "args": ["/Users/britleywrenhoff/git/claude-tools/docs_pdf_bridge.py"]
+    },
+    "slack-digest-bridge": {
+      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
+      "args": ["/Users/britleywrenhoff/git/claude-tools/slack_digest_bridge.py"]
+    },
+    "github-audit-bridge": {
+      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
+      "args": ["/Users/britleywrenhoff/git/claude-tools/github_audit_bridge.py"]
+    },
     "repo-bridge": {
       "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
       "args": ["/Users/britleywrenhoff/git/claude-tools/repo_bridge.py"]

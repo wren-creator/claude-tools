@@ -1205,7 +1205,14 @@ deliberately excluded - see each one's Notes.
 
 A standalone chat loop (`ollama_agent.py`, not an MCP server itself) that lets
 a local Ollama model actually call the tools `mcpo` fronts -
-`gemini-bridge`, `tn3270-bridge`, `repo-bridge` - over plain HTTP. The DIY
+`gemini-bridge` (including `commit_gate` for pre-commit review),
+`ollama-bridge` (`prefilter_diff` etc., the local-only review that still works
+under `--offline`), `docs-pdf-bridge` (`build_pdf`), `port-tower-bridge`, `slack-digest-bridge`,
+`github-audit-bridge`, `tn3270-bridge`, `repo-bridge` - over plain HTTP.
+`github-audit-bridge__enable_dependabot` is hidden from the chat model via
+`BLOCKED_TOOLS` in `ollama_agent.py` (it mutates repos); `--offline` also
+drops the Slack and GitHub servers. Restart `mcpo` after editing `mcpo_config.json` so new servers show
+up. The DIY
 alternative to routing through Open WebUI: no extra service, just a script
 that turns `mcpo`'s OpenAPI spec into Ollama's own function-calling `tools`
 format and dispatches whatever the model calls.
