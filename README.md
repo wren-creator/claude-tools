@@ -1248,18 +1248,24 @@ deliberately excluded - see each one's Notes.
 ## ollama-agent
 
 A standalone chat loop (`ollama_agent.py`, not an MCP server itself) that lets
-a local Ollama model actually call the tools `mcpo` fronts -
-`gemini-bridge` (including `commit_gate` for pre-commit review),
-`rag-bridge` (local semantic search), `ollama-bridge` (`prefilter_diff` etc., the local-only review that still works
-under `--offline`), `docs-pdf-bridge` (`build_pdf`), `port-tower-bridge`, `slack-digest-bridge`,
-`github-audit-bridge`, `tn3270-bridge`, `repo-bridge` - over plain HTTP.
+a local Ollama model actually call the tools `mcpo` fronts, over plain HTTP:
+
+- `gemini-bridge` (including `commit_gate` for pre-commit review)
+- `rag-bridge` (local semantic search)
+- `ollama-bridge` (`prefilter_diff` and friends, the local-only review that
+  still works under `--offline`)
+- `docs-pdf-bridge` (`build_pdf`)
+- `port-tower-bridge`, `slack-digest-bridge`, `github-audit-bridge`
+- `tn3270-bridge`, `repo-bridge`
+
 `github-audit-bridge__enable_dependabot` is hidden from the chat model via
-`BLOCKED_TOOLS` in `ollama_agent.py` (it mutates repos); `--offline` also
-drops the Slack and GitHub servers. Restart `mcpo` after editing `mcpo_config.json` so new servers show
-up. The DIY
-alternative to routing through Open WebUI: no extra service, just a script
-that turns `mcpo`'s OpenAPI spec into Ollama's own function-calling `tools`
-format and dispatches whatever the model calls.
+`BLOCKED_TOOLS` in `ollama_agent.py` (it mutates repos), and `--offline` also
+drops the Slack and GitHub servers. Restart `mcpo` after editing
+`mcpo_config.json` so new servers show up.
+
+It's the DIY alternative to routing through Open WebUI: no extra service, just
+a script that turns `mcpo`'s OpenAPI spec into Ollama's own function-calling
+`tools` format and dispatches whatever the model calls.
 
 - Fetches each server's own `openapi.json` from `mcpo` (there's no single
   combined spec with real paths - see Notes) and converts it into Ollama's
