@@ -1,6 +1,66 @@
 # claude-tools
 
-Local MCP servers that give Claude Code access to other tools mid-session.
+Local MCP servers that give Claude Code access to other tools mid-session, and
+(through an `mcpo` proxy) give a local Ollama chat model the same tools.
+
+## Quick start (fresh clone)
+
+Do these in order. This gets the local Ollama chat running with its tools;
+the per-bridge sections below cover registering individual bridges with
+Claude Code.
+
+1. **Prerequisites:** `git`, Python 3.10 or newer, and
+   [Ollama](https://ollama.com) installed and running (`ollama serve`, or the
+   menu bar app).
+2. **Clone and install:**
+   ```
+   git clone https://github.com/wren-creator/claude-tools.git ~/git/claude-tools
+   cd ~/git/claude-tools
+   python3 -m venv .venv
+   .venv/bin/pip install -r requirements.txt
+   ```
+3. **Pull the models:** the embedding model for `rag-bridge`, and your chat
+   model. Check the exact tag with `ollama list`.
+   ```
+   ollama pull nomic-embed-text
+   ollama pull qwen2.5-coder:7b        # or whichever chat model you use
+   ```
+4. **Create `~/.mcpo/.env`** with any key you choose and your model settings,
+   then lock it down:
+   ```
+   mkdir -p ~/.mcpo
+   cat > ~/.mcpo/.env <<'EOF'
+   MCPO_API_KEY=pick-a-long-random-string
+   OLLAMA_MODEL=qwen2.5-coder:7b
+   OLLAMA_NUM_CTX=16384
+   EOF
+   chmod 600 ~/.mcpo/.env
+   ```
+   Bigger models want more room: `OLLAMA_NUM_CTX=32768` and
+   `OLLAMA_TIMEOUT=300` suit a 30B-class model. See "Second machine, bigger
+   models" under the mcpo proxy section for every setting.
+5. **Start the proxy and check the tools:**
+   ```
+   ./mcpo-start.sh
+   ./mcpo-tools.sh
+   ```
+6. **Chat:**
+   ```
+   .venv/bin/python ollama_agent.py
+   ```
+   Add `--offline` to drop the tools that need the internet, and
+   `--model <tag>` to override `OLLAMA_MODEL` for one run. `./mcpo-stop.sh`
+   shuts the proxy down.
+
+**Optional extras**, each only needed for its own tools:
+- **Gemini tools** (`gemini-bridge`, including `commit_gate`'s escalation):
+  `npm install -g @google/gemini-cli`, then log in once. Without it, run the
+  chat with `--offline`.
+- **Slack digest:** `SLACK_BOT_TOKEN=...` in `~/.slack/.env`.
+- **GitHub audit:** `gh auth login`.
+- **Claude Code:** register a bridge with
+  `claude mcp add <name> --scope user -- ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/<file>.py`
+  (see each bridge's Setup section).
 
 ## gemini-bridge
 
