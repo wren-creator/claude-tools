@@ -1,44 +1,44 @@
 {
   "mcpServers": {
     "gemini-bridge": {
-      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
-      "args": ["/Users/britleywrenhoff/git/claude-tools/gemini_bridge.py"]
+      "command": ".venv/bin/python",
+      "args": ["gemini_bridge.py"]
     },
     "tn3270-bridge": {
-      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
-      "args": ["/Users/britleywrenhoff/git/claude-tools/tn3270_bridge.py"]
+      "command": ".venv/bin/python",
+      "args": ["tn3270_bridge.py"]
     },
     "rag-bridge": {
-      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
-      "args": ["/Users/britleywrenhoff/git/claude-tools/rag_bridge.py"]
+      "command": ".venv/bin/python",
+      "args": ["rag_bridge.py"]
     },
     "port-tower-bridge": {
-      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
-      "args": ["/Users/britleywrenhoff/git/claude-tools/port_tower_bridge.py"]
+      "command": ".venv/bin/python",
+      "args": ["port_tower_bridge.py"]
     },
     "ollama-bridge": {
-      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
-      "args": ["/Users/britleywrenhoff/git/claude-tools/ollama_bridge.py"]
+      "command": ".venv/bin/python",
+      "args": ["ollama_bridge.py"]
     },
     "sandbox-write-bridge": {
-      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
-      "args": ["/Users/britleywrenhoff/git/claude-tools/sandbox_write_bridge.py"]
+      "command": ".venv/bin/python",
+      "args": ["sandbox_write_bridge.py"]
     },
     "docs-pdf-bridge": {
-      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
-      "args": ["/Users/britleywrenhoff/git/claude-tools/docs_pdf_bridge.py"]
+      "command": ".venv/bin/python",
+      "args": ["docs_pdf_bridge.py"]
     },
     "slack-digest-bridge": {
-      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
-      "args": ["/Users/britleywrenhoff/git/claude-tools/slack_digest_bridge.py"]
+      "command": ".venv/bin/python",
+      "args": ["slack_digest_bridge.py"]
     },
     "github-audit-bridge": {
-      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
-      "args": ["/Users/britleywrenhoff/git/claude-tools/github_audit_bridge.py"]
+      "command": ".venv/bin/python",
+      "args": ["github_audit_bridge.py"]
     },
     "repo-bridge": {
-      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
-      "args": ["/Users/britleywrenhoff/git/claude-tools/repo_bridge.py"]
+      "command": ".venv/bin/python",
+      "args": ["repo_bridge.py"]
     }
   }
 }

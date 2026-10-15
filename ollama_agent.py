@@ -23,17 +23,33 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+
+
+def _seed_ollama_env() -> None:
+    """Pull OLLAMA_* settings (host, model, ctx, timeout) out of ~/.mcpo/.env
+    when they aren't already in the real environment, so one file configures
+    mcpo-start.sh and this chat the same way on each machine."""
+    path = Path.home() / ".mcpo" / ".env"
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        key, _, value = line.strip().partition("=")
+        if key.startswith("OLLAMA_"):
+            os.environ.setdefault(key, value.strip())
+
+
+_seed_ollama_env()
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-DEFAULT_MODEL = "qwen2.5-coder:7b"  # same default as ollama_bridge.py - :14b
-# is more capable but noticeably slower on CPU-only Ollama; override
-# --model for :14b when latency isn't a concern
+DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")  # same default as
+# ollama_bridge.py - :14b is more capable but noticeably slower on CPU-only
+# Ollama. Set OLLAMA_MODEL (env or ~/.mcpo/.env) or pass --model to change it.
 DEFAULT_MCPO_URL = "http://localhost:8000"
-DEFAULT_NUM_CTX = 8192  # Ollama defaults to 2048 and would silently
+DEFAULT_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))  # Ollama defaults to 2048 and would silently
 # truncate the tool schemas + system prompt before the conversation even
 # starts - same gotcha ollama_bridge.py's _call_ollama works around.
 MCPO_ENV_PATH = Path.home() / ".mcpo" / ".env"
 LOG_PATH = Path(__file__).parent / "ollama_agent_log.jsonl"
-OLLAMA_TIMEOUT = 120  # local 14b tool-calling turns are slower than a
+OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "120"))  # local 14b tool-calling turns are slower than a
 # plain triage prompt
 MCPO_TIMEOUT = 60
 MAX_TOOL_ITERATIONS = 8

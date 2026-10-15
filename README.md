@@ -1277,6 +1277,36 @@ key to paste or process to hunt down:
 Restart after editing `mcpo_config.json`: `./mcpo-stop.sh && ./mcpo-start.sh`.
 `MCPO_PORT` overrides the default port 8000 for all three.
 
+### Second machine, bigger models
+
+Nothing about the model or machine is baked in. These settings go in
+`~/.mcpo/.env` (or the real environment), and both `mcpo-start.sh` and
+`ollama_agent.py` read them, so one file configures a whole machine:
+
+```
+MCPO_API_KEY=your-key
+OLLAMA_MODEL=<the tag from `ollama list`>   # default qwen2.5-coder:7b
+OLLAMA_NUM_CTX=32768                        # default 8192
+OLLAMA_TIMEOUT=300                          # seconds, default 60 (bridges) / 120 (chat)
+OLLAMA_HOST=http://localhost:11434          # point at another box if you like
+OLLAMA_EMBED_MODEL=nomic-embed-text         # for rag-bridge
+```
+
+On a fresh machine: clone the repo, create the `.venv` and install
+`requirements.txt`, `ollama pull` the chat model and `nomic-embed-text`, write
+that env file (`chmod 600`), then `./mcpo-start.sh`. `mcpo_config.json` uses
+paths relative to the repo, which is why the scripts `cd` into it first; if you
+run `mcpo` by hand, do it from the repo folder. `--model` on `ollama_agent.py`
+still overrides `OLLAMA_MODEL` for a single run.
+
+Raise `OLLAMA_NUM_CTX` for any bigger model. The 31 tool definitions alone are
+about 6k tokens, so the 8192 default leaves roughly 2k for the conversation.
+Settings changed here apply to `ollama-bridge`, `slack-digest-bridge` and
+`rag-bridge` too, because `mcpo-start.sh` hands `OLLAMA_*` to the bridge
+subprocesses. The `ollama-bridge` that Claude Code launches itself doesn't see
+this file; set `-e OLLAMA_MODEL=...` on its `claude mcp add` if you want it to
+use a bigger model.
+
 ### Notes
 
 - `linkedin-bridge` is excluded from `mcpo_config.json` on purpose.

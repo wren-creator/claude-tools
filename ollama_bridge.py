@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import time
 import urllib.error
@@ -15,13 +16,13 @@ mcp = FastMCP("ollama-bridge")
 LOG_PATH = Path(__file__).parent / "ollama_log.jsonl"
 CACHE_PATH = Path(__file__).parent / "prefilter_cache.json"
 CACHE_MAX = 200
-OLLAMA_HOST = "http://localhost:11434"
-OLLAMA_TIMEOUT = 60
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "60"))
 MAX_CONTEXT_CHARS = 20_000  # local 7B models have far less usable context than Gemini
 MAX_LOG_CHARS = 40_000  # logs run longer than diffs but still need a hard ceiling
 MAX_CHUNKS = 8  # bounds a huge diff to ~8 model calls instead of an unbounded wait
-DEFAULT_MODEL = "qwen2.5-coder:7b"
-DEFAULT_NUM_CTX = 8192
+DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
+DEFAULT_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
 LOG_NUM_CTX = 24576  # generous headroom over MAX_LOG_CHARS even at a dense ~2 chars/token
 
 PREFILTER_INSTRUCTIONS = (

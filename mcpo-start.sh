@@ -27,6 +27,11 @@ if [ -z "$KEY" ]; then
   exit 1
 fi
 
+# bridges inherit OLLAMA_HOST / OLLAMA_MODEL / OLLAMA_NUM_CTX / OLLAMA_TIMEOUT / OLLAMA_EMBED_MODEL
+while IFS='=' read -r k v; do
+  case "$k" in OLLAMA_*) export "$k=$v" ;; esac
+done <"$ENVFILE"
+
 nohup .venv/bin/mcpo --port "$PORT" --api-key "$KEY" --config mcpo_config.json >"$LOGFILE" 2>&1 &
 echo $! >"$PIDFILE"
 

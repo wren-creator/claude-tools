@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import subprocess
@@ -15,9 +16,9 @@ mcp = FastMCP("rag-bridge")
 
 LOG_PATH = Path(__file__).parent / "rag_log.jsonl"
 DATA_DIR = Path(__file__).parent / "rag_data"
-OLLAMA_HOST = "http://localhost:11434"
-OLLAMA_TIMEOUT = 120
-EMBED_MODEL = "nomic-embed-text"
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "120"))
+EMBED_MODEL = os.environ.get("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 EMBED_BATCH = 16
 CHUNK_CHARS = 1500  # nomic-embed-text's window is ~2k tokens; code runs ~3 chars/token
 CHUNK_OVERLAP_LINES = 3

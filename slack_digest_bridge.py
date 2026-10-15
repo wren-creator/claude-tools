@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import time
 import urllib.error
@@ -14,10 +15,10 @@ ENV_FILE = Path.home() / ".slack" / ".env"
 LOG_PATH = Path(__file__).parent / "slack_digest_log.jsonl"
 SLACK_API = "https://slack.com/api"
 HTTP_TIMEOUT = 30
-OLLAMA_HOST = "http://localhost:11434"
-OLLAMA_TIMEOUT = 60
-OLLAMA_NUM_CTX = 8192
-DEFAULT_MODEL = "qwen2.5-coder:7b"
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "60"))
+OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
+DEFAULT_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:7b")
 MAX_CONTEXT_CHARS = 20_000
 REPLIES_LIMIT = 200
 
