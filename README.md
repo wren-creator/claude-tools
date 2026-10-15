@@ -1260,6 +1260,23 @@ deliberately excluded - see each one's Notes.
    tool call requires `Authorization: Bearer <api-key>`; the docs/spec
    endpoints themselves are intentionally public (mcpo's default behavior).
 
+### Helper scripts
+
+Three small scripts in the repo root wrap the commands above, so there's no
+key to paste or process to hunt down:
+
+- `./mcpo-start.sh` starts `mcpo` in the background using the key in
+  `~/.mcpo/.env`, waits until it's ready, and writes `mcpo.pid` and
+  `mcpo.log` (both gitignored). It refuses to start twice, or if something
+  else already holds the port, and warns if Ollama isn't reachable.
+- `./mcpo-stop.sh` stops it and the bridge subprocesses it spawned. Safe to
+  run when nothing is running.
+- `./mcpo-tools.sh` lists the tools the Ollama chat will see. Extra args pass
+  through, e.g. `./mcpo-tools.sh --offline`.
+
+Restart after editing `mcpo_config.json`: `./mcpo-stop.sh && ./mcpo-start.sh`.
+`MCPO_PORT` overrides the default port 8000 for all three.
+
 ### Notes
 
 - `linkedin-bridge` is excluded from `mcpo_config.json` on purpose.

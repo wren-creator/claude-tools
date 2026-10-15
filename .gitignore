@@ -5,3 +5,5 @@ __pycache__/
 youtube_schedule_state.json
 prefilter_cache.json
 rag_data/
+mcpo.pid
+mcpo.log
