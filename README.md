@@ -964,6 +964,75 @@ same handful of lookups per repo.
   change only ever happens through Claude Code's own guarded tool-call flow,
   not an HTTP client holding the proxy's API key.
 
+## housekeeping-bridge
+
+One place for the repeatable GitHub housekeeping across every repo on an
+account, backed by the `gh` CLI and Docker. Every tool that changes GitHub
+defaults to `dry_run=True`.
+
+- `housekeeping_audit()` — read-only. Per repo: Dependabot alerts and
+  security fixes, whether a `dependabot.yml` exists where package manifests
+  do, whether delete/force-push is blocked and PRs are required on the
+  default branch (judged by what the active rulesets do, not what they are
+  named), deploy keys, and open Dependabot PRs. Opens with a "needs
+  attention" summary.
+- `apply_protection(repos="", require_pr=True, dry_run=True)` — adds a
+  `prot` ruleset (no branch deletion, no force-push) and a `require-pr`
+  ruleset (PR required on the default branch, zero approvals) to public repos
+  that lack that behaviour. Private repos are skipped: rulesets need GitHub
+  Pro.
+- `add_dependabot_config(repos="", dry_run=True)` — generates a
+  `dependabot.yml` for repos with manifests and none yet (npm, pip, Docker,
+  Go, Actions; weekly, minor+patch grouped, release cooldown). Public repos
+  get a branch and PR, private repos a direct commit. Repos on the config
+  skip list are left alone.
+- `start_bump_tests(repos="")` — background job: clones each repo and tests
+  every open Dependabot PR **inside a throwaway Docker container** (only the
+  cloned repo is mounted, so a package's install script never runs on the
+  host), comparing each PR to a baseline run of the default branch.
+  Docker-base-image bumps are marked `MANUAL`.
+- `bump_test_status(job_id="")` — progress, then the last results grouped
+  into tiers: `tier1` (patch/minor, build and tests passed), `tier2`
+  (installs and compiles, no tests), `broken-by-bump`, `hold-major-or-group`,
+  `hold-pre-1.0`, `manual`.
+- `merge_bumps(include_untested=False, dry_run=True)` — merges tier1 (plus
+  tier2 if asked). Refuses stale results, PRs younger than the cooldown,
+  majors, grouped PRs and pre-1.0 minors. On a conflict it comments
+  `@dependabot rebase`; run it again later.
+
+### Setup
+
+1. `gh auth login` with a token that has `repo` scope, and Docker running for
+   the bump tests.
+2. Register the server with Claude Code:
+   ```
+   claude mcp add housekeeping-bridge --scope user -- \
+     ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/housekeeping_bridge.py
+   ```
+3. Restart Claude Code / reload the window.
+4. Edit `~/.housekeeping/config.json` (created on first run): `owner`,
+   `skip_dependabot_yml` (default `["widgetorium"]`, a deliberately
+   vulnerable lab), `skip_all`, `cooldown_days` (7), `min_pr_age_days` (3),
+   `max_result_age_hours` (48) and the Docker images per ecosystem.
+
+### Notes
+
+- Built 2026-10-15 from a manual pass over 55 repos. Each tool is one step of
+  that pass made repeatable.
+- Bump tests run in Docker on purpose. Running `npm install` on the host
+  executes third-party install scripts, and a Mac can pass what Linux CI
+  fails: `rpgle_library` PR #7 built and passed on macOS but failed in the
+  Linux container, matching GitHub's own CI.
+- Rulesets are matched by behaviour, not name. `ModelForge` and `web3270`
+  already blocked deletion and force-push under other names, and matching on
+  `prot` would have stacked a duplicate on top.
+- Excluded from `mcpo_config.json` on purpose, same rationale as
+  `github-audit-bridge`: these tools change real settings on live repos, so
+  they stay behind Claude Code's guarded tool-call flow.
+- State lives in `~/.housekeeping/` (config, `last_results.json`, a
+  `housekeeping_log.jsonl` of every change made, per-PR test logs), not in
+  this repo.
+
 ## port-tower-bridge
 
 Exposes three tools for a host-wide view of which TCP/UDP ports are taken
@@ -1297,7 +1366,8 @@ Fronts `gemini-bridge`, `tn3270-bridge`, and `repo-bridge` with
 [`mcpo`](https://github.com/open-webui/mcpo), so tool-calling harnesses that
 don't speak MCP natively (e.g. Ollama or llama.cpp-based agents) can call
 these tools over plain HTTP/OpenAPI instead. `linkedin-bridge`,
-`youtube-bridge`, `discord-bridge`, and `github-audit-bridge` are
+`youtube-bridge`, `discord-bridge`, `github-audit-bridge`, and
+`housekeeping-bridge` are
 deliberately excluded - see each one's Notes.
 
 ### Setup
