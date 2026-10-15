@@ -1158,6 +1158,50 @@ real `http(s)` links).
 - Read-only apart from writing the target `.pdf`; safe to call unprompted
   after a doc edit, unlike the publishing bridges.
 
+## rag-bridge
+
+Local semantic search, with nothing leaving the machine. Embeds a folder with
+`nomic-embed-text` through Ollama and keeps the vectors in a small SQLite file
+per index (`rag_data/<name>.db`, gitignored). Search is brute-force cosine
+similarity in numpy, which is plenty fast at this scale (a few thousand
+chunks) and needs no vector database.
+
+The point is the 8k context window on the local chat model: instead of
+stuffing whole files into the prompt, it asks for the five chunks that
+matter. Use `repo-bridge`'s `search_codebase` when you know the exact
+keyword, this when you only know what the thing does.
+
+- `index_directory(path, name="")` builds or refreshes an index. Re-runs only
+  re-embed files whose content hash changed and drop files that vanished. In
+  a git repo it uses `git ls-files -co --exclude-standard`, so `.gitignore`
+  is honored. Always skips `.env*`, keys, certs, databases, binaries, files
+  over 200KB, and trees over 3000 files.
+- `semantic_search(query, index, top_k=5)` returns the best chunks as
+  `path:start-end (score)` plus the text.
+- `list_indexes()` and `delete_index(name)` (deletes embeddings only).
+
+Setup: `ollama pull nomic-embed-text`, then
+```
+claude mcp add rag-bridge --scope user -- \
+  ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/rag_bridge.py
+```
+It is also in `mcpo_config.json`, so the local Ollama chat gets it, and it
+works under `--offline`. Calls are logged to `rag_log.jsonl` (gitignored).
+
+### Notes
+
+- nomic-embed-text wants task prefixes, `search_document: ` on stored chunks
+  and `search_query: ` on the question; both are applied.
+- Chunks are about 1500 characters, line-aligned with a 3-line overlap, so
+  every hit cites real line numbers.
+- Switching `EMBED_MODEL` means deleting and rebuilding the indexes, since
+  vectors from different models aren't comparable.
+- Verified 2026-10-14 by indexing `claude-tools` itself (25 files, 247 chunks,
+  about 11 seconds, 0.0s on an unchanged re-run); a plain-English question about
+  tool calls arriving as text returned `_fallback_tool_calls` as the top hit.
+- Indexes are plain text on disk. The secret-file skip list is by filename,
+  so a secret pasted into an ordinary source file would get embedded.
+
 ## mcpo proxy
 
 Fronts `gemini-bridge`, `tn3270-bridge`, and `repo-bridge` with
@@ -1206,7 +1250,7 @@ deliberately excluded - see each one's Notes.
 A standalone chat loop (`ollama_agent.py`, not an MCP server itself) that lets
 a local Ollama model actually call the tools `mcpo` fronts -
 `gemini-bridge` (including `commit_gate` for pre-commit review),
-`ollama-bridge` (`prefilter_diff` etc., the local-only review that still works
+`rag-bridge` (local semantic search), `ollama-bridge` (`prefilter_diff` etc., the local-only review that still works
 under `--offline`), `docs-pdf-bridge` (`build_pdf`), `port-tower-bridge`, `slack-digest-bridge`,
 `github-audit-bridge`, `tn3270-bridge`, `repo-bridge` - over plain HTTP.
 `github-audit-bridge__enable_dependabot` is hidden from the chat model via
@@ -1377,6 +1421,10 @@ task actually sends.
 
 ## Roadmap
 
+- [x] Add `rag-bridge`: local semantic search over indexed folders using
+      nomic-embed-text, usable from Claude Code and the Ollama chat.
+- [ ] Sandboxed write-file tool (one output directory) so the Ollama chat can
+      write Markdown before calling `build_pdf`.
 - [x] Add a third gemini-bridge tool for querying Gemini's larger context
       window on full files, not just diffs.
 - [x] repo-bridge: expand `get_symbol` language support beyond

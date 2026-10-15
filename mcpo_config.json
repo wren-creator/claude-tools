@@ -8,6 +8,10 @@
       "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
       "args": ["/Users/britleywrenhoff/git/claude-tools/tn3270_bridge.py"]
     },
+    "rag-bridge": {
+      "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
+      "args": ["/Users/britleywrenhoff/git/claude-tools/rag_bridge.py"]
+    },
     "port-tower-bridge": {
       "command": "/Users/britleywrenhoff/git/claude-tools/.venv/bin/python",
       "args": ["/Users/britleywrenhoff/git/claude-tools/port_tower_bridge.py"]
