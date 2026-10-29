@@ -1033,6 +1033,96 @@ defaults to `dry_run=True`.
   `housekeeping_log.jsonl` of every change made, per-PR test logs), not in
   this repo.
 
+## voice-lint-bridge
+
+A deterministic check for the writing rules in the global `CLAUDE.md`, so the
+agent stops re-reading every draft against the same checklist. No model, just
+regex, so a check costs almost nothing and the answer is the same every time.
+
+- `lint_text(text, kind="generic")` checks a draft passed inline.
+- `lint_file(path, kind="doc")` checks a `.md` or `.txt` file on disk, so a
+  README or a book chapter never has to be read into the conversation just to
+  be checked.
+
+`kind` is `generic`, `slack`, `doc`, `linkedin` or `commit`. Every kind flags
+a hyphen, en dash or em dash used as a spacing device (real compound words
+like "well-known" are fine) and a short list of corporate-speak phrases
+(warnings only). On top of that:
+
+- `linkedin` requires the Slack, GitHub, book and contact-email links, bans
+  the retired consulting-site link, and enforces LinkedIn's 3,000 character
+  limit.
+- `commit` requires a `feat:`/`fix:`/`docs:`/`refactor:` prefix and the
+  `Co-Authored-By` trailer.
+
+Fenced code blocks, inline code and URLs are skipped, since a hyphen in a
+shell command or a link is not prose. The result is `CLEAN: ...` or a short
+list of line-numbered `ERROR`/`WARN` findings, so only the flagged lines get
+rewritten.
+
+### Setup
+
+```
+claude mcp add voice-lint-bridge --scope user -- \
+  ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/voice_lint_bridge.py
+```
+Restart Claude Code / reload the window. Tests: `.venv/bin/python -m unittest
+voice_lint_test`.
+
+### Notes
+
+- Built 2026-10-29 from a token review: the writing rules are mechanical
+  enough that re-reading a draft against them was pure overhead.
+- Linting the existing `README.md` as a doc finds well over a hundred em
+  dashes, which predate this tool. They are not fixed in bulk on purpose;
+  fix them when a section is touched.
+- This checks the rules, not the voice. Whether a draft sounds like Britley
+  is still a job for the big model.
+
+## jcl-lint-bridge
+
+A local JCL linter, so JCL gets checked before it is submitted or pasted
+into a review, without spending tokens on the mechanical mistakes. No model,
+no network, no mainframe connection.
+
+- `lint_jcl(jcl)` lints JCL passed inline.
+- `lint_jcl_file(path)` lints a file on disk (`.jcl`, `.cntl`, `.proc`,
+  `.prc`, `.job`, `.sub` or `.txt`, max 200KB).
+
+It catches records over 80 columns, lowercase outside apostrophes, names over
+8 characters, unknown operations, broken continuations (a trailing comma with
+no continuation, text outside columns 4 to 16), a missing JOB, a DD before
+the first EXEC, duplicate step and DD names, EXEC with no PGM or procedure,
+unbalanced IF/ELSE/ENDIF, misspelled DD/EXEC/JOB keywords with a "did you
+mean", bad dataset names and members, bad DISP values, DISP missing or NEW
+with no SPACE, a NEW dataset deleted at step end, a BLKSIZE that doesn't fit
+LRECL and RECFM, backward references to a step that doesn't exist, PARM over
+100 characters, and `PASSWORD=` on a JOB statement. In-stream data is skipped.
+
+### Setup
+
+```
+claude mcp add jcl-lint-bridge --scope user -- \
+  ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/jcl_lint_bridge.py
+```
+Restart Claude Code / reload the window. Tests: `.venv/bin/python -m unittest
+jcl_lint_test`.
+
+### Notes
+
+- It does not expand procedures or INCLUDE members, resolve symbolic
+  parameters, check the catalog, or know site JES and SMS rules. A clean
+  result means no mechanical mistakes, not that the job will run; submitting
+  with `TYPRUN=SCAN` is still the authority.
+- Warnings are judgment calls (a NEW dataset with no SPACE is fine when an
+  SMS data class supplies it). Errors are things JES would reject or that
+  almost certainly aren't what was meant.
+- The keyword lists are the standard z/OS JCL keywords. If a site-specific
+  or newer keyword shows up as "unknown keyword", it is a warning, add it to
+  the set in `jcl_lint_bridge.py`.
+- The tests use synthetic JCL. Run it against a few real jobs and add any
+  false positive as a test case.
+
 ## port-tower-bridge
 
 Exposes three tools for a host-wide view of which TCP/UDP ports are taken
@@ -1464,6 +1554,7 @@ a local Ollama model actually call the tools `mcpo` fronts, over plain HTTP:
 - `docs-pdf-bridge` (`build_pdf`)
 - `port-tower-bridge`, `slack-digest-bridge`, `github-audit-bridge`
 - `tn3270-bridge`, `repo-bridge`
+- `voice-lint-bridge`, `jcl-lint-bridge` (deterministic linters)
 
 `github-audit-bridge__enable_dependabot` is hidden from the chat model via
 `BLOCKED_TOOLS` in `ollama_agent.py` (it mutates repos), and `--offline` also
@@ -1814,3 +1905,22 @@ task actually sends.
 - [x] Point the global pre-commit workflow at `commit_gate` instead of
       calling `prefilter_diff` then `review_diff` by hand (done 2026-09-24
       in the global `~/.claude/CLAUDE.md`).
+- [x] Token review (2026-10-29): `voice-lint-bridge` and `jcl-lint-bridge`,
+      deterministic checks that replace the agent re-reading drafts and JCL
+      against the same rules.
+- [ ] voice-lint-bridge: have `post_to_linkedin` refuse to run until the draft
+      passes `lint_text(kind="linkedin")`.
+- [ ] Index Britley's own writing (`book-manuscripts/kinetic-code/STYLE.md`
+      and manuscript, past posts) in `rag-bridge` so voice examples come
+      from `semantic_search` instead of being pasted into context.
+- [ ] tn3270-bridge: a `tso_run` tool that sends a command, pages through
+      MORE/PF8, strips ISPF chrome and returns only the output text.
+- [ ] racf-parse: deterministic parsers that turn `LISTUSER`, `LISTGRP`,
+      `RLIST` and `SEARCH` output into compact JSON. Needs scrubbed real z/OS
+      samples first, every `tn3270` session so far is `pub400.com` (IBM i).
+- [ ] zos-log-triage: regex for ABEND codes, condition codes and IEF messages
+      ahead of the local model, in the shape of `triage_log`.
+- [ ] tn3270-bridge: `read_panel_state` crashed once on
+      `invalid literal for int() with base 16: 'SA(41=f8)'`; find and fix.
+- [ ] tn3270-bridge: stop `tn3270_log.jsonl` recording screen content and
+      typed keys before real RACF or password-prompt sessions go through it.
