@@ -39,6 +39,14 @@
     "repo-bridge": {
       "command": ".venv/bin/python",
       "args": ["repo_bridge.py"]
+    },
+    "voice-lint-bridge": {
+      "command": ".venv/bin/python",
+      "args": ["voice_lint_bridge.py"]
+    },
+    "jcl-lint-bridge": {
+      "command": ".venv/bin/python",
+      "args": ["jcl_lint_bridge.py"]
     }
   }
 }
