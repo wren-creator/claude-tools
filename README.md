@@ -1815,6 +1815,18 @@ camera.
   flags, confirmed correct against `--help`, but hasn't itself been
   exercised since no working way to export individual preset JSON was
   found in this OrcaSlicer build.
+- **Don't call `control_print("stop")` on a "stuck"-looking status alone.**
+  A named state (`CHANGING_FILAMENT`, `CALIBRATING_EXTRUSION`, etc.)
+  holding steady at ~220C nozzle for a minute or more is normal
+  startup/calibration behavior on this printer, not a stall. On
+  2026-11-09, one stop correctly caught a real problem (wrong
+  `ams_mapping`, feeding an empty slot); a second stop right after, on a
+  print that had that fix applied and was actually progressing normally,
+  was a false alarm based on this same misread. `progress` still creeping
+  upward is the real signal even when the state name and temperature look
+  flat. Reserve `stop` for an actual reported problem: nonzero
+  `error code`, an HMS entry, or direct physical/visual confirmation of a
+  jam.
 - **Set `BAMBU_USE_AMS` correctly or expect a feed jam.** The first real
   test print ran with it left at `false` against a printer that actually
   has an AMS lite attached, and the filament feed jammed hard enough to

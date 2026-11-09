@@ -304,7 +304,21 @@ def get_printer_status() -> str:
 @mcp.tool()
 def control_print(action: str) -> str:
     """Pause, resume, or stop the print currently running on the printer.
-    action must be one of: pause, resume, stop."""
+    action must be one of: pause, resume, stop.
+
+    Don't call stop based on get_printer_status alone looking "stuck" - a
+    named state (CHANGING_FILAMENT, CALIBRATING_EXTRUSION, etc.) holding
+    steady at ~220C nozzle for a minute or more is normal startup/
+    calibration behavior, not a stall. Confirmed live on 2026-11-09: one
+    stop correctly caught a real problem (wrong ams_mapping, feeding an
+    empty slot); a second stop right after, on a print that had that fix
+    applied and was actually progressing normally, was a false alarm based
+    on this same misread. The progress percentage still creeping upward
+    (even while the state name and temperature look flat) is the real
+    signal, and direct visual/physical confirmation beats inferring a jam
+    from telemetry. Reserve stop for an actual reported problem (error
+    code nonzero, HMS entries, or someone physically watching it fail).
+    """
     if action not in VALID_ACTIONS:
         return f"Error: action must be one of {sorted(VALID_ACTIONS)}, got {action!r}."
     try:
