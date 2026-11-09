@@ -1789,7 +1789,7 @@ camera.
    BAMBU_IP=192.168.1.50
    BAMBU_SERIAL=00M00A000000000
    BAMBU_ACCESS_CODE=12345678
-   BAMBU_USE_AMS=false
+   BAMBU_USE_AMS=false   # true if an AMS/AMS lite is attached - see Notes below, getting this wrong caused a real feed jam
    ORCASLICER_BIN=/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer
    BAMBU_STUDIO_APP=/Applications/BambuStudio.app
    EOF
@@ -1806,32 +1806,43 @@ camera.
 
 ### Notes
 
-- `send_and_print`, `get_printer_status`, and `control_print` depend
-  entirely on `bambulabs_api`'s protocol implementation, which is
-  reverse-engineered and has a documented history of breaking across Bambu
-  firmware updates (notably January 2025's LAN-auth change). If a call
-  fails outright, suspect a firmware/library mismatch before suspecting
-  this bridge's wrapper code. `get_printer_status` was verified live
-  against a real A1 mini on 2026-11-09 (real MQTT handshake, real
-  bed/nozzle temps, real IDLE state) - MQTT state takes a few seconds to
-  populate after connecting, so an immediate `UNKNOWN`/`0%`/`0C` read is
-  normal, not a failure.
-- `slice_model` was verified end-to-end on 2026-11-09 by slicing a real
-  saved OrcaSlicer project (object + A1 mini/PLA Basic/0.20mm Standard
-  presets) - produced real Bambu-flavored G-code (433 layers, ~1h18m
-  estimated print time). The project-file (`model_path` = `.3mf`) path is
-  the one that's proven; the bare-STL path (with `settings_files`/
+- The full pipeline (`slice_model` -> `send_and_print` -> real print) was
+  verified end-to-end on 2026-11-09: sliced a real saved OrcaSlicer project
+  into real Bambu-flavored G-code, uploaded it, and watched the A1 mini
+  actually heat up and print it. The project-file (`model_path` = `.3mf`)
+  path is the one that's proven; the bare-STL path (with `settings_files`/
   `filament_files`) shares the same `--load-settings`/`--load-filaments`
   flags, confirmed correct against `--help`, but hasn't itself been
   exercised since no working way to export individual preset JSON was
   found in this OrcaSlicer build.
+- **Set `BAMBU_USE_AMS` correctly or expect a feed jam.** The first real
+  test print ran with it left at `false` against a printer that actually
+  has an AMS lite attached, and the filament feed jammed hard enough to
+  need the manual release held by hand. Match this setting to your actual
+  hardware, not to what any A1 mini ships with by default.
+- During setup, uploads failed outright (FTP `451`, and some "successful"
+  uploads were silently written to the printer as 0-byte files - confirmed
+  by re-listing the printer's own directory, not assumed). Checking
+  Developer Mode and the SD card both turned out to be dead ends; a
+  **printer power cycle** fixed it. Root cause looked like a stuck
+  connection/session on the printer's side, not storage or firmware
+  settings - if uploads start silently failing again, power-cycle the
+  printer before debugging code or credentials. `send_and_print` now
+  re-lists the printer's directory and compares the reported file size
+  against the local file before ever calling `start_print`, specifically
+  because of this - a truthy return from the underlying upload call isn't
+  trustworthy on its own.
+- `send_and_print`, `get_printer_status`, and `control_print` depend
+  entirely on `bambulabs_api`'s protocol implementation, which is
+  reverse-engineered and has a documented history of breaking across Bambu
+  firmware updates (notably January 2025's LAN-auth change). MQTT state
+  takes a few seconds to populate after connecting, so an immediate
+  `UNKNOWN`/`0%`/`0C` read from `get_printer_status` is normal, not a
+  failure.
 - `open_in_bambu_studio` opens by the app's bundle path
   (`BAMBU_STUDIO_APP`), not by its registered display name ("Bambu
   Studio") - `open -a "Bambu Studio"` failed right after a fresh install
-  because Launch Services hadn't indexed it yet.
-- `use_ams` defaults to `BAMBU_USE_AMS` (false) since the A1 mini ships
-  without an AMS; only set it true if one is attached.
-- `open_in_bambu_studio` only supports macOS.
+  because Launch Services hadn't indexed it yet. Also macOS-only.
 
 ## Roadmap
 

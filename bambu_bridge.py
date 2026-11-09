@@ -21,7 +21,7 @@ pattern as every other bridge's credential file:
     BAMBU_IP=192.168.1.50
     BAMBU_SERIAL=00M00A000000000
     BAMBU_ACCESS_CODE=12345678
-    BAMBU_USE_AMS=false          # optional, default false (A1 mini has no AMS)
+    BAMBU_USE_AMS=false          # true if an AMS/AMS lite is attached; A1 mini ships without one by default
     ORCASLICER_BIN=/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer  # required: no CLI symlink on PATH
     BAMBU_STUDIO_APP=/Applications/BambuStudio.app  # optional override
 
@@ -212,8 +212,12 @@ def send_and_print(
 ) -> str:
     """Upload a sliced .gcode.3mf (or .3mf) to the Bambu A1 mini over local
     FTPS and, unless start=False, start printing it. use_ams defaults to
-    BAMBU_USE_AMS from ~/.bambu/.env (false, since the A1 mini has no AMS by
-    default) - override only if yours has one attached.
+    BAMBU_USE_AMS from ~/.bambu/.env - set that to match whether an
+    AMS/AMS lite is actually attached. Getting this wrong isn't just
+    cosmetic: sending use_ams=False to a printer whose filament is
+    physically routed through an AMS unit caused a feed/tension issue
+    requiring a manual release during this bridge's first real test print
+    on 2026-11-09, on a printer with an AMS lite attached.
 
     The upload is verified against the printer's own file listing before
     any print is started - bambulabs_api's upload_file() can report success
