@@ -118,6 +118,23 @@ def _use_ams_default() -> bool:
     return _load_credentials().get("BAMBU_USE_AMS", "false").strip().lower() in ("1", "true", "yes")
 
 
+def _remote_file_size(printer, filename: str) -> int | None:
+    """Look up filename's size on the printer's root FTP directory, or None
+    if it isn't listed. Confirmed necessary the hard way: bambulabs_api's
+    upload_file() swallows FTP errors and can report success for an upload
+    the printer silently wrote as a 0-byte file - the reported size here is
+    the only way to tell a real upload from a truncated one."""
+    _, lines = printer.ftp_client.list_directory()
+    for line in lines:
+        parts = line.split()
+        if len(parts) >= 5 and parts[-1] == filename:
+            try:
+                return int(parts[4])
+            except ValueError:
+                return None
+    return None
+
+
 @mcp.tool()
 def slice_model(
     model_path: str,
@@ -197,17 +214,34 @@ def send_and_print(
     FTPS and, unless start=False, start printing it. use_ams defaults to
     BAMBU_USE_AMS from ~/.bambu/.env (false, since the A1 mini has no AMS by
     default) - override only if yours has one attached.
+
+    The upload is verified against the printer's own file listing before
+    any print is started - bambulabs_api's upload_file() can report success
+    for a transfer the printer actually wrote as 0 bytes (seen live on
+    2026-11-09: the printer's FTP server silently truncated every file over
+    ~100 bytes while still returning a 226/success FTP response), so a
+    truthy return from upload_file() alone is not trustworthy.
     """
     path = Path(file_path).expanduser().resolve()
     if not path.exists():
         return f"Error: {path} does not exist."
+    local_size = path.stat().st_size
 
     try:
         printer = _get_printer()
         with path.open("rb") as f:
-            uploaded = printer.upload_file(f, filename=path.name)
+            printer.upload_file(f, filename=path.name)
+        remote_size = _remote_file_size(printer, path.name)
+        if remote_size != local_size:
+            _log({"tool": "send_and_print", "file": str(path), "local_size": local_size, "remote_size": remote_size})
+            return (
+                f"Error: upload did not verify. Local file is {local_size} bytes; printer reports "
+                f"{remote_size if remote_size is not None else 'the file is not listed at all'}. "
+                f"Not starting a print against a bad/partial file. Check the printer's storage "
+                f"(SD card inserted? not full?) before retrying."
+            )
         if not start:
-            return f"Uploaded to printer: {uploaded}"
+            return f"Uploaded and verified ({remote_size} bytes): {path.name}"
         ok = printer.start_print(
             path.name, plate_number, use_ams=use_ams if use_ams is not None else _use_ams_default()
         )
