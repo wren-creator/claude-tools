@@ -22,15 +22,19 @@ pattern as every other bridge's credential file:
     BAMBU_SERIAL=00M00A000000000
     BAMBU_ACCESS_CODE=12345678
     BAMBU_USE_AMS=false          # optional, default false (A1 mini has no AMS)
-    ORCASLICER_BIN=/path/to/orca-slicer   # optional override
+    ORCASLICER_BIN=/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer  # required: no CLI symlink on PATH
+    BAMBU_STUDIO_APP=/Applications/BambuStudio.app  # optional override
 
 NOTE: the printer-control path (upload/print/status/pause/resume/stop) is
 built directly on the `bambulabs_api` package, which already implements the
 reverse-engineered implicit-FTPS and local-MQTT protocol - not reimplemented
-here. The slicing path (slice_model) has NOT been verified end-to-end in
-this environment: no OrcaSlicer install was available to test CLI flags
-against. Expect to debug the exact --load-settings/--load-filaments paths
-against `orca-slicer --help` on your own machine the first time you use it.
+here. slice_model's --slice/--load-settings/--load-filaments/--export-3mf
+flags are confirmed correct against a real installed OrcaSlicer 2.5.0's
+--help, but a full slice has not been run end-to-end: that needs real
+process/machine/filament preset JSON files, which OrcaSlicer only writes to
+~/Library/Application Support/OrcaSlicer/system/BBL/ after its one-time
+first-launch setup wizard (pick Bambu Lab > A1 mini) has been completed by
+hand at least once.
 """
 from __future__ import annotations
 
@@ -250,7 +254,11 @@ def open_in_bambu_studio(file_path: str) -> str:
         return f"Error: {path} does not exist."
     if sys.platform != "darwin":
         return "Error: open_in_bambu_studio only supports macOS (`open -a`) in this bridge."
-    result = subprocess.run(["open", "-a", "Bambu Studio", str(path)], capture_output=True, text=True)
+    app = _load_credentials().get("BAMBU_STUDIO_APP", "/Applications/BambuStudio.app")
+    # Opening by the app's registered display name ("Bambu Studio") is
+    # unreliable right after a fresh install - Launch Services hasn't always
+    # indexed it yet. The bundle path always works.
+    result = subprocess.run(["open", "-a", app, str(path)], capture_output=True, text=True)
     if result.returncode != 0:
         return f"Error opening Bambu Studio: {result.stderr.strip()}"
     return f"Opened {path.name} in Bambu Studio."

@@ -1752,10 +1752,23 @@ camera.
 
 ### Setup
 
-1. On the printer: Settings > Network, turn on **LAN Only Mode**, note the
+1. Install the two Bambu apps (Homebrew casks; neither ships a CLI symlink
+   on `PATH`, so the bridge needs their bundle paths directly):
+   ```
+   brew install --cask orcaslicer bambu-studio
+   ```
+2. Run OrcaSlicer once by hand (`open -a /Applications/OrcaSlicer.app`) and
+   complete its first-launch setup wizard, picking **Bambu Lab > A1 mini**.
+   This is what writes real process/machine/filament preset JSON files to
+   `~/Library/Application Support/OrcaSlicer/system/BBL/` - `slice_model`
+   has nothing to point `settings_files`/`filament_files` at until this has
+   been done at least once. Opening the app fresh also leaves Launch
+   Services not yet knowing it by its display name, which is why the
+   bridge opens Bambu Studio by bundle path rather than by name.
+3. On the printer: Settings > Network, turn on **LAN Only Mode**, note the
    IP and access code shown there. Serial number is on the printer's sticker
    or Settings > Device.
-2. Create `~/.bambu/.env`:
+4. Create `~/.bambu/.env`:
    ```
    mkdir -p ~/.bambu
    cat > ~/.bambu/.env <<'EOF'
@@ -1764,14 +1777,13 @@ camera.
    BAMBU_ACCESS_CODE=12345678
    BAMBU_USE_AMS=false
    ORCASLICER_BIN=/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer
+   BAMBU_STUDIO_APP=/Applications/BambuStudio.app
    EOF
    chmod 600 ~/.bambu/.env
    ```
-   `ORCASLICER_BIN` is only needed if `orca-slicer`/`OrcaSlicer` isn't on
-   `PATH`.
-3. `.venv/bin/pip install -r requirements.txt` (pulls in `bambulabs_api`
+5. `.venv/bin/pip install -r requirements.txt` (pulls in `bambulabs_api`
    and its `paho-mqtt` dependency).
-4. Register the bridge:
+6. Register the bridge:
    ```
    claude mcp add bambu-bridge --scope user -- \
      ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/bambu_bridge.py
@@ -1786,15 +1798,19 @@ camera.
   firmware updates (notably January 2025's LAN-auth change). If a call
   fails outright, suspect a firmware/library mismatch before suspecting
   this bridge's wrapper code.
-- `slice_model` has **not been verified end-to-end** - no OrcaSlicer
-  install was available in the environment this was built in to test real
-  CLI flags against. The `--slice`/`--load-settings`/`--load-filaments`/
-  `--export-3mf` flags are documented behavior per the OrcaSlicer CLI wiki,
-  but unverified against an actual run. If it rejects a flag, run
-  `<orcaslicer binary> --help` on your install and adjust.
+- `slice_model`'s `--slice`/`--load-settings`/`--load-filaments`/
+  `--export-3mf` flags are confirmed correct against a real installed
+  OrcaSlicer 2.5.0's own `--help` output, but a full slice has not been run
+  end-to-end - that needs the preset JSON files from step 2 above, which
+  weren't generated in the environment this was built in. If it rejects a
+  flag anyway, run `$ORCASLICER_BIN --help` and adjust.
+- `open_in_bambu_studio` opens by the app's bundle path
+  (`BAMBU_STUDIO_APP`), not by its registered display name ("Bambu
+  Studio") - `open -a "Bambu Studio"` failed right after a fresh install
+  because Launch Services hadn't indexed it yet.
 - `use_ams` defaults to `BAMBU_USE_AMS` (false) since the A1 mini ships
   without an AMS; only set it true if one is attached.
-- `open_in_bambu_studio` only supports macOS (`open -a "Bambu Studio"`).
+- `open_in_bambu_studio` only supports macOS.
 
 ## Roadmap
 
