@@ -1723,6 +1723,79 @@ repo path. Separately verified `--offline` fixes the `gemini-bridge`
 looping failure documented above, using the same invocation shape this
 task actually sends.
 
+## bambu-bridge
+
+Send a model straight to the Bambu Lab A1 mini over the local network - LAN
+Only Mode, no Bambu cloud account involved.
+
+- `slice_model(stl_path, settings_files, filament_files, plate=1,
+  output_path=None)` headlessly slices an STL via the OrcaSlicer CLI into a
+  `.gcode.3mf`, using config bundle files exported from your own OrcaSlicer
+  install (`Help > Export Configs`, or the individual
+  process/filament/machine JSON files under its config folder).
+- `send_and_print(file_path, plate_number=1, use_ams=None, start=True)`
+  FTPS-uploads a sliced file to the printer and starts the print.
+- `get_printer_status()` returns state, progress, remaining time, bed and
+  nozzle temperature, current file, and HMS error code.
+- `control_print(action)` pauses, resumes, or stops the active print.
+- `open_in_bambu_studio(file_path)` hands a model or sliced file to the
+  Bambu Studio GUI instead, for manual adjustment before printing it
+  yourself from there.
+
+The printer-control path (upload, print, status, pause/resume/stop) is
+built directly on the [`bambulabs_api`](https://pypi.org/project/bambulabs-api/)
+package, which already implements the reverse-engineered implicit-FTPS
+(port 990) and local-MQTT (port 8883, topic `device/<serial>/...`) protocol
+- not reimplemented here. `_get_printer()` calls `mqtt_start()` directly
+rather than `connect()`, skipping `camera_start()`, since the A1 mini has no
+camera.
+
+### Setup
+
+1. On the printer: Settings > Network, turn on **LAN Only Mode**, note the
+   IP and access code shown there. Serial number is on the printer's sticker
+   or Settings > Device.
+2. Create `~/.bambu/.env`:
+   ```
+   mkdir -p ~/.bambu
+   cat > ~/.bambu/.env <<'EOF'
+   BAMBU_IP=192.168.1.50
+   BAMBU_SERIAL=00M00A000000000
+   BAMBU_ACCESS_CODE=12345678
+   BAMBU_USE_AMS=false
+   ORCASLICER_BIN=/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer
+   EOF
+   chmod 600 ~/.bambu/.env
+   ```
+   `ORCASLICER_BIN` is only needed if `orca-slicer`/`OrcaSlicer` isn't on
+   `PATH`.
+3. `.venv/bin/pip install -r requirements.txt` (pulls in `bambulabs_api`
+   and its `paho-mqtt` dependency).
+4. Register the bridge:
+   ```
+   claude mcp add bambu-bridge --scope user -- \
+     ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/bambu_bridge.py
+   ```
+   Restart Claude Code / reload the window.
+
+### Notes
+
+- `send_and_print`, `get_printer_status`, and `control_print` depend
+  entirely on `bambulabs_api`'s protocol implementation, which is
+  reverse-engineered and has a documented history of breaking across Bambu
+  firmware updates (notably January 2025's LAN-auth change). If a call
+  fails outright, suspect a firmware/library mismatch before suspecting
+  this bridge's wrapper code.
+- `slice_model` has **not been verified end-to-end** - no OrcaSlicer
+  install was available in the environment this was built in to test real
+  CLI flags against. The `--slice`/`--load-settings`/`--load-filaments`/
+  `--export-3mf` flags are documented behavior per the OrcaSlicer CLI wiki,
+  but unverified against an actual run. If it rejects a flag, run
+  `<orcaslicer binary> --help` on your install and adjust.
+- `use_ams` defaults to `BAMBU_USE_AMS` (false) since the A1 mini ships
+  without an AMS; only set it true if one is attached.
+- `open_in_bambu_studio` only supports macOS (`open -a "Bambu Studio"`).
+
 ## Roadmap
 
 - [x] Add `rag-bridge`: local semantic search over indexed folders using
