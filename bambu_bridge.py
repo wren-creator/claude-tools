@@ -118,6 +118,18 @@ def _use_ams_default() -> bool:
     return _load_credentials().get("BAMBU_USE_AMS", "false").strip().lower() in ("1", "true", "yes")
 
 
+def _ams_mapping_default() -> list[int]:
+    """0-indexed AMS slot to feed from, i.e. one less than the slot number
+    shown in the printer's own UI ("Spool 2" = index 1). Defaults to [0]
+    (bambulabs_api's own default, "Spool 1") when BAMBU_AMS_SLOT is unset -
+    wrong for any AMS where the loaded filament isn't physically in slot 1.
+    Confirmed the hard way on 2026-11-09: left at the default against a
+    printer with filament in slot 2, the printer tried to feed from the
+    empty slot 1 instead and had to be stopped mid print."""
+    raw = _load_credentials().get("BAMBU_AMS_SLOT", "").strip()
+    return [int(raw)] if raw else [0]
+
+
 def _remote_file_size(printer, filename: str) -> int | None:
     """Look up filename's size on the printer's root FTP directory, or None
     if it isn't listed. Confirmed necessary the hard way: bambulabs_api's
@@ -208,6 +220,7 @@ def send_and_print(
     file_path: str,
     plate_number: int = 1,
     use_ams: bool | None = None,
+    ams_mapping: list[int] | None = None,
     start: bool = True,
 ) -> str:
     """Upload a sliced .gcode.3mf (or .3mf) to the Bambu A1 mini over local
@@ -218,6 +231,15 @@ def send_and_print(
     physically routed through an AMS unit caused a feed/tension issue
     requiring a manual release during this bridge's first real test print
     on 2026-11-09, on a printer with an AMS lite attached.
+
+    ams_mapping is which physical AMS slot(s) to feed from, 0-indexed (one
+    less than the slot number shown on the printer - "Spool 2" is index 1).
+    Defaults to BAMBU_AMS_SLOT from ~/.bambu/.env, or [0] if that's unset.
+    Get this wrong and the printer will try to feed from the wrong spool,
+    including an empty one, exactly what happened on the AMS's first real
+    use here: left at the default (slot 0 / "Spool 1") against filament
+    actually loaded in slot 1 / "Spool 2", the printer sat trying to pull
+    from an empty slot until the print was stopped by hand.
 
     The upload is verified against the printer's own file listing before
     any print is started - bambulabs_api's upload_file() can report success
@@ -247,7 +269,10 @@ def send_and_print(
         if not start:
             return f"Uploaded and verified ({remote_size} bytes): {path.name}"
         ok = printer.start_print(
-            path.name, plate_number, use_ams=use_ams if use_ams is not None else _use_ams_default()
+            path.name,
+            plate_number,
+            use_ams=use_ams if use_ams is not None else _use_ams_default(),
+            ams_mapping=ams_mapping if ams_mapping is not None else _ams_mapping_default(),
         )
         _log({"tool": "send_and_print", "file": str(path), "started": ok})
         return f"Uploaded and {'started print of' if ok else 'FAILED to start print of'} {path.name}"
