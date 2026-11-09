@@ -28,13 +28,17 @@ pattern as every other bridge's credential file:
 NOTE: the printer-control path (upload/print/status/pause/resume/stop) is
 built directly on the `bambulabs_api` package, which already implements the
 reverse-engineered implicit-FTPS and local-MQTT protocol - not reimplemented
-here. slice_model's --slice/--load-settings/--load-filaments/--export-3mf
-flags are confirmed correct against a real installed OrcaSlicer 2.5.0's
---help, but a full slice has not been run end-to-end: that needs real
-process/machine/filament preset JSON files, which OrcaSlicer only writes to
-~/Library/Application Support/OrcaSlicer/system/BBL/ after its one-time
-first-launch setup wizard (pick Bambu Lab > A1 mini) has been completed by
-hand at least once.
+here. get_printer_status was verified live against a real A1 mini on
+2026-11-09 (real MQTT handshake, real bed/nozzle temps, real IDLE state).
+
+slice_model's --slice/--load-settings/--load-filaments/--export-3mf flags
+are confirmed correct against a real installed OrcaSlicer 2.5.0's --help,
+but a full slice has not been run end-to-end yet. OrcaSlicer's vendor
+presets ship packed inside a proprietary container (profiles/BBL.opc,
+magic bytes "ZCRO") that it only unpacks internally at runtime - there is
+no plain JSON on disk to point settings_files/filament_files at until you
+pick a filament + process preset in the GUI once and use File > "Export
+current configuration to files" to write them out.
 """
 from __future__ import annotations
 

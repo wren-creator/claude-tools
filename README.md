@@ -1759,12 +1759,18 @@ camera.
    ```
 2. Run OrcaSlicer once by hand (`open -a /Applications/OrcaSlicer.app`) and
    complete its first-launch setup wizard, picking **Bambu Lab > A1 mini**.
-   This is what writes real process/machine/filament preset JSON files to
-   `~/Library/Application Support/OrcaSlicer/system/BBL/` - `slice_model`
-   has nothing to point `settings_files`/`filament_files` at until this has
-   been done at least once. Opening the app fresh also leaves Launch
-   Services not yet knowing it by its display name, which is why the
-   bridge opens Bambu Studio by bundle path rather than by name.
+   Then pick a filament preset (e.g. "Bambu PLA Basic @BBL A1 mini") and a
+   process/quality preset (e.g. "0.20mm Standard @BBL A1 mini") in the top
+   preset bar, and use **File > Export current configuration to files** to
+   write plain machine/filament/process JSON out to disk (e.g. into
+   `~/.bambu/profiles/`) - point `slice_model`'s `settings_files`/
+   `filament_files` at those. This step can't be skipped or scripted: the
+   vendor presets ship packed inside a proprietary container
+   (`profiles/BBL.opc`) that OrcaSlicer only unpacks internally at
+   runtime, never to plain files, until you export one by hand. Opening
+   the app fresh also leaves Launch Services not yet knowing it by its
+   display name, which is why the bridge opens Bambu Studio by bundle path
+   rather than by name.
 3. On the printer: Settings > Network, turn on **LAN Only Mode**, note the
    IP and access code shown there. Serial number is on the printer's sticker
    or Settings > Device.
@@ -1797,13 +1803,17 @@ camera.
   reverse-engineered and has a documented history of breaking across Bambu
   firmware updates (notably January 2025's LAN-auth change). If a call
   fails outright, suspect a firmware/library mismatch before suspecting
-  this bridge's wrapper code.
+  this bridge's wrapper code. `get_printer_status` was verified live
+  against a real A1 mini on 2026-11-09 (real MQTT handshake, real
+  bed/nozzle temps, real IDLE state) - MQTT state takes a few seconds to
+  populate after connecting, so an immediate `UNKNOWN`/`0%`/`0C` read is
+  normal, not a failure.
 - `slice_model`'s `--slice`/`--load-settings`/`--load-filaments`/
   `--export-3mf` flags are confirmed correct against a real installed
   OrcaSlicer 2.5.0's own `--help` output, but a full slice has not been run
-  end-to-end - that needs the preset JSON files from step 2 above, which
-  weren't generated in the environment this was built in. If it rejects a
-  flag anyway, run `$ORCASLICER_BIN --help` and adjust.
+  end-to-end - that needs the exported preset JSON files from step 2
+  above. If it rejects a flag anyway, run `$ORCASLICER_BIN --help` and
+  adjust.
 - `open_in_bambu_studio` opens by the app's bundle path
   (`BAMBU_STUDIO_APP`), not by its registered display name ("Bambu
   Studio") - `open -a "Bambu Studio"` failed right after a fresh install
