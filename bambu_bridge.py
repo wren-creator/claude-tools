@@ -2,11 +2,11 @@
 the local network, in LAN-only mode - no Bambu cloud account involved.
 
 Five tools:
-- slice_model(stl_path, settings_files, filament_files, ...) - headless
-  slice via the OrcaSlicer CLI into a .gcode.3mf, using config bundle files
-  exported from your own OrcaSlicer install (Help > Export Configs, or the
-  individual process/filament/machine JSON files under OrcaSlicer's config
-  folder). Not hardcoded to any profile name, since those vary by install.
+- slice_model(model_path, ...) - headless slice via the OrcaSlicer CLI into
+  a .gcode.3mf. model_path is normally an OrcaSlicer project (.3mf saved
+  with the object on the plate and presets already picked in the GUI),
+  which carries its own settings - no exported config files needed. A bare
+  STL/STEP is also accepted but then needs settings_files/filament_files.
 - send_and_print(file_path, ...) - FTPS-upload a sliced file to the printer
   and start the print.
 - get_printer_status() - current state, progress, temps, current file,
@@ -25,20 +25,20 @@ pattern as every other bridge's credential file:
     ORCASLICER_BIN=/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer  # required: no CLI symlink on PATH
     BAMBU_STUDIO_APP=/Applications/BambuStudio.app  # optional override
 
-NOTE: the printer-control path (upload/print/status/pause/resume/stop) is
-built directly on the `bambulabs_api` package, which already implements the
-reverse-engineered implicit-FTPS and local-MQTT protocol - not reimplemented
-here. get_printer_status was verified live against a real A1 mini on
-2026-11-09 (real MQTT handshake, real bed/nozzle temps, real IDLE state).
-
-slice_model's --slice/--load-settings/--load-filaments/--export-3mf flags
-are confirmed correct against a real installed OrcaSlicer 2.5.0's --help,
-but a full slice has not been run end-to-end yet. OrcaSlicer's vendor
-presets ship packed inside a proprietary container (profiles/BBL.opc,
-magic bytes "ZCRO") that it only unpacks internally at runtime - there is
-no plain JSON on disk to point settings_files/filament_files at until you
-pick a filament + process preset in the GUI once and use File > "Export
-current configuration to files" to write them out.
+NOTE: both halves of this bridge are now verified against real hardware
+and a real install, not just documentation:
+- get_printer_status: verified live against a real A1 mini on 2026-11-09
+  (real MQTT handshake, real bed/nozzle temps, real IDLE state).
+- slice_model: verified end-to-end the same day by slicing a real
+  OrcaSlicer project (.3mf, object + Bambu A1 mini presets saved via the
+  GUI) - produced real Bambu-flavored G-code (433 layers, ~1h18m estimated
+  print time). OrcaSlicer's vendor presets ship packed inside a
+  proprietary container (profiles/BBL.opc, magic bytes "ZCRO") that it
+  only unpacks internally at runtime - no per-preset JSON export option
+  actually worked in this build (Export Preset Bundle's picker errored
+  with "select at least one printer or filament" regardless of selection),
+  so the project-file path above is the one that's proven, not a
+  workaround.
 """
 from __future__ import annotations
 
@@ -120,32 +120,38 @@ def _use_ams_default() -> bool:
 
 @mcp.tool()
 def slice_model(
-    stl_path: str,
-    settings_files: list[str],
-    filament_files: list[str],
+    model_path: str,
     plate: int = 1,
     output_path: str | None = None,
+    settings_files: list[str] | None = None,
+    filament_files: list[str] | None = None,
 ) -> str:
-    """Headlessly slice an STL (or step/3mf) into a .gcode.3mf via the
-    OrcaSlicer CLI, ready for send_and_print().
+    """Headlessly slice a model into a .gcode.3mf via the OrcaSlicer CLI,
+    ready for send_and_print().
 
-    settings_files: one or more exported print+machine config JSON paths
-    (OrcaSlicer: Help > Export Configs, or the process.json/machine.json
-    under its config folder for the A1 mini + your chosen nozzle), passed
-    to --load-settings. filament_files: exported filament config JSON
-    path(s), passed to --load-filaments. plate: which plate to slice (1 for
-    a single-plate file). output_path: where to write the .gcode.3mf,
-    defaults next to stl_path.
+    model_path: either an OrcaSlicer *project* file (.3mf saved via File >
+    Save Project As, with a real object on the plate and the right
+    printer/filament/process presets already picked in the GUI) - the
+    normal, verified path, since the project already embeds both geometry
+    and settings and needs nothing else - or a bare STL/STEP, in which case
+    settings_files and filament_files become required (exported print+
+    machine / filament config JSON, via OrcaSlicer's preset export tools).
+    plate: which plate to slice (1 for a single-plate file). output_path:
+    where to write the .gcode.3mf, defaults next to model_path.
 
-    Requires OrcaSlicer installed; set ORCASLICER_BIN in ~/.bambu/.env if it
-    isn't on PATH as `orca-slicer`. This path has not been exercised against
-    a real OrcaSlicer install - if the CLI rejects a flag, run
-    `<orcaslicer binary> --help` and adjust settings_files/filament_files
-    accordingly.
+    Requires OrcaSlicer installed; set ORCASLICER_BIN in ~/.bambu/.env to
+    its binary's full path (no CLI symlink is installed on PATH by the
+    Homebrew cask).
     """
-    stl = Path(stl_path).expanduser().resolve()
-    if not stl.exists():
-        return f"Error: {stl} does not exist."
+    model = Path(model_path).expanduser().resolve()
+    if not model.exists():
+        return f"Error: {model} does not exist."
+    if model.suffix.lower() != ".3mf" and not (settings_files and filament_files):
+        return (
+            "Error: a bare STL/STEP needs both settings_files and filament_files. "
+            "Easier: save an OrcaSlicer project (.3mf) with the object on the plate "
+            "and presets already picked, and pass that as model_path instead."
+        )
 
     creds = _load_credentials()
     binary = creds.get("ORCASLICER_BIN") or shutil.which("orca-slicer") or shutil.which("OrcaSlicer")
@@ -155,16 +161,15 @@ def slice_model(
             "Set ORCASLICER_BIN in ~/.bambu/.env to its full path."
         )
 
-    out = Path(output_path).expanduser().resolve() if output_path else stl.with_suffix(".gcode.3mf")
+    out = Path(output_path).expanduser().resolve() if output_path else model.with_suffix(".gcode.3mf")
 
-    cmd = [
-        binary,
-        "--slice", str(plate),
-        "--load-settings", ";".join(settings_files),
-        "--load-filaments", ";".join(filament_files),
-        "--export-3mf", str(out),
-        "--", str(stl),
-    ]
+    cmd = [binary, "--slice", str(plate)]
+    if settings_files:
+        cmd += ["--load-settings", ";".join(settings_files)]
+    if filament_files:
+        cmd += ["--load-filaments", ";".join(filament_files)]
+    cmd += ["--export-3mf", str(out), "--", str(model)]
+
     _log({"tool": "slice_model", "cmd": cmd})
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
@@ -178,7 +183,7 @@ def slice_model(
             f"Slice failed (exit {result.returncode}).\n"
             f"stdout:\n{result.stdout[-2000:]}\nstderr:\n{result.stderr[-2000:]}"
         )
-    return f"Sliced {stl.name} -> {out}"
+    return f"Sliced {model.name} -> {out}"
 
 
 @mcp.tool()

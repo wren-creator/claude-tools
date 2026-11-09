@@ -1728,11 +1728,14 @@ task actually sends.
 Send a model straight to the Bambu Lab A1 mini over the local network - LAN
 Only Mode, no Bambu cloud account involved.
 
-- `slice_model(stl_path, settings_files, filament_files, plate=1,
-  output_path=None)` headlessly slices an STL via the OrcaSlicer CLI into a
-  `.gcode.3mf`, using config bundle files exported from your own OrcaSlicer
-  install (`Help > Export Configs`, or the individual
-  process/filament/machine JSON files under its config folder).
+- `slice_model(model_path, plate=1, output_path=None, settings_files=None,
+  filament_files=None)` headlessly slices a model via the OrcaSlicer CLI
+  into a `.gcode.3mf`. `model_path` is normally an OrcaSlicer *project*
+  file (`.3mf` saved via File > Save Project As, with the object on the
+  plate and the printer/filament/process presets already picked in the
+  GUI) - it carries its own settings, so nothing else is needed. A bare
+  STL/STEP is also accepted but then requires `settings_files`/
+  `filament_files` (exported preset JSON) too.
 - `send_and_print(file_path, plate_number=1, use_ams=None, start=True)`
   FTPS-uploads a sliced file to the printer and starts the print.
 - `get_printer_status()` returns state, progress, remaining time, bed and
@@ -1759,22 +1762,27 @@ camera.
    ```
 2. Run OrcaSlicer once by hand (`open -a /Applications/OrcaSlicer.app`) and
    complete its first-launch setup wizard, picking **Bambu Lab > A1 mini**.
-   Then pick a filament preset (e.g. "Bambu PLA Basic @BBL A1 mini") and a
-   process/quality preset (e.g. "0.20mm Standard @BBL A1 mini") in the top
-   preset bar, and use **File > Export current configuration to files** to
-   write plain machine/filament/process JSON out to disk (e.g. into
-   `~/.bambu/profiles/`) - point `slice_model`'s `settings_files`/
-   `filament_files` at those. This step can't be skipped or scripted: the
-   vendor presets ship packed inside a proprietary container
-   (`profiles/BBL.opc`) that OrcaSlicer only unpacks internally at
-   runtime, never to plain files, until you export one by hand. Opening
-   the app fresh also leaves Launch Services not yet knowing it by its
-   display name, which is why the bridge opens Bambu Studio by bundle path
-   rather than by name.
-3. On the printer: Settings > Network, turn on **LAN Only Mode**, note the
+   Opening the app fresh also leaves Launch Services not yet knowing it by
+   its display name, which is why the bridge opens Bambu Studio by bundle
+   path rather than by name.
+3. For each model you want `slice_model` to use directly: import or drag
+   it onto the plate, confirm printer/filament/process are set the way you
+   want (defaults: A1 mini / your chosen filament / your chosen process),
+   then **File > Save Project As...** to a `.3mf`. That project file is
+   what you pass as `model_path` - it embeds both the geometry and the
+   settings, so nothing else needs exporting. (The individual preset
+   export paths - `File > Export > Export Preset Bundle...` and friends -
+   turned out not to work in this OrcaSlicer build: the bundle dialog's
+   picker rejects every selection with "select at least one printer or
+   filament" regardless of what's actually selected, and the vendor
+   presets it would otherwise need live packed inside a proprietary
+   container (`profiles/BBL.opc`) that's never unpacked to plain files on
+   disk. The project-file route above is what was actually verified
+   end-to-end, not a workaround.)
+4. On the printer: Settings > Network, turn on **LAN Only Mode**, note the
    IP and access code shown there. Serial number is on the printer's sticker
    or Settings > Device.
-4. Create `~/.bambu/.env`:
+5. Create `~/.bambu/.env`:
    ```
    mkdir -p ~/.bambu
    cat > ~/.bambu/.env <<'EOF'
@@ -1787,9 +1795,9 @@ camera.
    EOF
    chmod 600 ~/.bambu/.env
    ```
-5. `.venv/bin/pip install -r requirements.txt` (pulls in `bambulabs_api`
+6. `.venv/bin/pip install -r requirements.txt` (pulls in `bambulabs_api`
    and its `paho-mqtt` dependency).
-6. Register the bridge:
+7. Register the bridge:
    ```
    claude mcp add bambu-bridge --scope user -- \
      ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/bambu_bridge.py
@@ -1808,12 +1816,15 @@ camera.
   bed/nozzle temps, real IDLE state) - MQTT state takes a few seconds to
   populate after connecting, so an immediate `UNKNOWN`/`0%`/`0C` read is
   normal, not a failure.
-- `slice_model`'s `--slice`/`--load-settings`/`--load-filaments`/
-  `--export-3mf` flags are confirmed correct against a real installed
-  OrcaSlicer 2.5.0's own `--help` output, but a full slice has not been run
-  end-to-end - that needs the exported preset JSON files from step 2
-  above. If it rejects a flag anyway, run `$ORCASLICER_BIN --help` and
-  adjust.
+- `slice_model` was verified end-to-end on 2026-11-09 by slicing a real
+  saved OrcaSlicer project (object + A1 mini/PLA Basic/0.20mm Standard
+  presets) - produced real Bambu-flavored G-code (433 layers, ~1h18m
+  estimated print time). The project-file (`model_path` = `.3mf`) path is
+  the one that's proven; the bare-STL path (with `settings_files`/
+  `filament_files`) shares the same `--load-settings`/`--load-filaments`
+  flags, confirmed correct against `--help`, but hasn't itself been
+  exercised since no working way to export individual preset JSON was
+  found in this OrcaSlicer build.
 - `open_in_bambu_studio` opens by the app's bundle path
   (`BAMBU_STUDIO_APP`), not by its registered display name ("Bambu
   Studio") - `open -a "Bambu Studio"` failed right after a fresh install
