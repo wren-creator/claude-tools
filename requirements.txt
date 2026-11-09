@@ -16,3 +16,4 @@ auto-editor
 google-genai
 playwright
 numpy
+bambulabs_api

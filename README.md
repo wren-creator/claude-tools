@@ -1723,6 +1723,139 @@ repo path. Separately verified `--offline` fixes the `gemini-bridge`
 looping failure documented above, using the same invocation shape this
 task actually sends.
 
+## bambu-bridge
+
+Send a model straight to the Bambu Lab A1 mini over the local network - LAN
+Only Mode, no Bambu cloud account involved.
+
+- `slice_model(model_path, plate=1, output_path=None, settings_files=None,
+  filament_files=None)` headlessly slices a model via the OrcaSlicer CLI
+  into a `.gcode.3mf`. `model_path` is normally an OrcaSlicer *project*
+  file (`.3mf` saved via File > Save Project As, with the object on the
+  plate and the printer/filament/process presets already picked in the
+  GUI) - it carries its own settings, so nothing else is needed. A bare
+  STL/STEP is also accepted but then requires `settings_files`/
+  `filament_files` (exported preset JSON) too.
+- `send_and_print(file_path, plate_number=1, use_ams=None, start=True)`
+  FTPS-uploads a sliced file to the printer and starts the print.
+- `get_printer_status()` returns state, progress, remaining time, bed and
+  nozzle temperature, current file, and HMS error code.
+- `control_print(action)` pauses, resumes, or stops the active print.
+- `open_in_bambu_studio(file_path)` hands a model or sliced file to the
+  Bambu Studio GUI instead, for manual adjustment before printing it
+  yourself from there.
+
+The printer-control path (upload, print, status, pause/resume/stop) is
+built directly on the [`bambulabs_api`](https://pypi.org/project/bambulabs-api/)
+package, which already implements the reverse-engineered implicit-FTPS
+(port 990) and local-MQTT (port 8883, topic `device/<serial>/...`) protocol
+- not reimplemented here. `_get_printer()` calls `mqtt_start()` directly
+rather than `connect()`, skipping `camera_start()`, since the A1 mini has no
+camera.
+
+### Setup
+
+1. Install the two Bambu apps (Homebrew casks; neither ships a CLI symlink
+   on `PATH`, so the bridge needs their bundle paths directly):
+   ```
+   brew install --cask orcaslicer bambu-studio
+   ```
+2. Run OrcaSlicer once by hand (`open -a /Applications/OrcaSlicer.app`) and
+   complete its first-launch setup wizard, picking **Bambu Lab > A1 mini**.
+   Opening the app fresh also leaves Launch Services not yet knowing it by
+   its display name, which is why the bridge opens Bambu Studio by bundle
+   path rather than by name.
+3. For each model you want `slice_model` to use directly: import or drag
+   it onto the plate, confirm printer/filament/process are set the way you
+   want (defaults: A1 mini / your chosen filament / your chosen process),
+   then **File > Save Project As...** to a `.3mf`. That project file is
+   what you pass as `model_path` - it embeds both the geometry and the
+   settings, so nothing else needs exporting. (The individual preset
+   export paths - `File > Export > Export Preset Bundle...` and friends -
+   turned out not to work in this OrcaSlicer build: the bundle dialog's
+   picker rejects every selection with "select at least one printer or
+   filament" regardless of what's actually selected, and the vendor
+   presets it would otherwise need live packed inside a proprietary
+   container (`profiles/BBL.opc`) that's never unpacked to plain files on
+   disk. The project-file route above is what was actually verified
+   end-to-end, not a workaround.)
+4. On the printer: Settings > Network, turn on **LAN Only Mode**, note the
+   IP and access code shown there. Serial number is on the printer's sticker
+   or Settings > Device.
+5. Create `~/.bambu/.env`:
+   ```
+   mkdir -p ~/.bambu
+   cat > ~/.bambu/.env <<'EOF'
+   BAMBU_IP=192.168.1.50
+   BAMBU_SERIAL=00M00A000000000
+   BAMBU_ACCESS_CODE=12345678
+   BAMBU_USE_AMS=false   # true if an AMS/AMS lite is attached - see Notes below, getting this wrong caused a real feed jam
+   ORCASLICER_BIN=/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer
+   BAMBU_STUDIO_APP=/Applications/BambuStudio.app
+   EOF
+   chmod 600 ~/.bambu/.env
+   ```
+6. `.venv/bin/pip install -r requirements.txt` (pulls in `bambulabs_api`
+   and its `paho-mqtt` dependency).
+7. Register the bridge:
+   ```
+   claude mcp add bambu-bridge --scope user -- \
+     ~/git/claude-tools/.venv/bin/python ~/git/claude-tools/bambu_bridge.py
+   ```
+   Restart Claude Code / reload the window.
+
+### Notes
+
+- The full pipeline (`slice_model` -> `send_and_print` -> real print) was
+  verified end-to-end on 2026-11-09: sliced a real saved OrcaSlicer project
+  into real Bambu-flavored G-code, uploaded it, and watched the A1 mini
+  actually heat up and print it. The project-file (`model_path` = `.3mf`)
+  path is the one that's proven; the bare-STL path (with `settings_files`/
+  `filament_files`) shares the same `--load-settings`/`--load-filaments`
+  flags, confirmed correct against `--help`, but hasn't itself been
+  exercised since no working way to export individual preset JSON was
+  found in this OrcaSlicer build.
+- **Don't call `control_print("stop")` on a "stuck"-looking status alone.**
+  A named state (`CHANGING_FILAMENT`, `CALIBRATING_EXTRUSION`, etc.)
+  holding steady at ~220C nozzle for a minute or more is normal
+  startup/calibration behavior on this printer, not a stall. On
+  2026-11-09, one stop correctly caught a real problem (wrong
+  `ams_mapping`, feeding an empty slot); a second stop right after, on a
+  print that had that fix applied and was actually progressing normally,
+  was a false alarm based on this same misread. `progress` still creeping
+  upward is the real signal even when the state name and temperature look
+  flat. Reserve `stop` for an actual reported problem: nonzero
+  `error code`, an HMS entry, or direct physical/visual confirmation of a
+  jam.
+- **Set `BAMBU_USE_AMS` correctly or expect a feed jam.** The first real
+  test print ran with it left at `false` against a printer that actually
+  has an AMS lite attached, and the filament feed jammed hard enough to
+  need the manual release held by hand. Match this setting to your actual
+  hardware, not to what any A1 mini ships with by default.
+- During setup, uploads failed outright (FTP `451`, and some "successful"
+  uploads were silently written to the printer as 0-byte files - confirmed
+  by re-listing the printer's own directory, not assumed). Checking
+  Developer Mode and the SD card both turned out to be dead ends; a
+  **printer power cycle** fixed it. Root cause looked like a stuck
+  connection/session on the printer's side, not storage or firmware
+  settings - if uploads start silently failing again, power-cycle the
+  printer before debugging code or credentials. `send_and_print` now
+  re-lists the printer's directory and compares the reported file size
+  against the local file before ever calling `start_print`, specifically
+  because of this - a truthy return from the underlying upload call isn't
+  trustworthy on its own.
+- `send_and_print`, `get_printer_status`, and `control_print` depend
+  entirely on `bambulabs_api`'s protocol implementation, which is
+  reverse-engineered and has a documented history of breaking across Bambu
+  firmware updates (notably January 2025's LAN-auth change). MQTT state
+  takes a few seconds to populate after connecting, so an immediate
+  `UNKNOWN`/`0%`/`0C` read from `get_printer_status` is normal, not a
+  failure.
+- `open_in_bambu_studio` opens by the app's bundle path
+  (`BAMBU_STUDIO_APP`), not by its registered display name ("Bambu
+  Studio") - `open -a "Bambu Studio"` failed right after a fresh install
+  because Launch Services hadn't indexed it yet. Also macOS-only.
+
 ## Roadmap
 
 - [x] Add `rag-bridge`: local semantic search over indexed folders using
