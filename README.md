@@ -2057,3 +2057,7 @@ camera.
       `invalid literal for int() with base 16: 'SA(41=f8)'`; find and fix.
 - [ ] tn3270-bridge: stop `tn3270_log.jsonl` recording screen content and
       typed keys before real RACF or password-prompt sessions go through it.
+- [x] Add `bambu-bridge`: slice via OrcaSlicer project files, upload and
+      print over LAN MQTT/FTPS on a Bambu Lab A1 mini, with AMS-aware
+      printing and a Bambu Studio handoff for manual tweaks. Verified
+      end-to-end on real hardware 2026-11-09 (see Notes above).
